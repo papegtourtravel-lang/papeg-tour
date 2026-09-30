@@ -1,0 +1,536 @@
+.review-page {
+  min-height: 100vh;
+  background: #f4f6f5;
+  color: #26332e;
+}
+
+/* CONTAINER */
+
+.review-container {
+  width: min(1180px, calc(100% - 40px));
+  margin: 0 auto;
+}
+
+/* HERO */
+
+.review-hero {
+  background: #1d5c48;
+  color: white;
+  padding: 56px 0 42px;
+}
+
+.review-brand {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.28em;
+  opacity: 0.9;
+}
+
+.review-hero h1 {
+  margin: 14px 0 8px;
+  font-size: clamp(32px, 5vw, 48px);
+  line-height: 1.05;
+  font-weight: 800;
+}
+
+.review-hero p {
+  max-width: 680px;
+  margin: 0;
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 16px;
+  line-height: 1.7;
+}
+
+/* PROGRESS */
+
+.review-progress {
+  display: flex;
+  align-items: center;
+  margin-top: 36px;
+  max-width: 620px;
+}
+
+.progress-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.progress-item.completed,
+.progress-item.active {
+  color: white;
+}
+
+.progress-number {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: 50%;
+  font-size: 12px;
+}
+
+.progress-item.completed .progress-number {
+  background: white;
+  color: #1d5c48;
+  border-color: white;
+}
+
+.progress-item.active .progress-number {
+  background: rgba(255, 255, 255, 0.15);
+  border-color: white;
+}
+
+.progress-line {
+  flex: 1;
+  height: 1px;
+  margin: 0 14px;
+  background: rgba(255, 255, 255, 0.25);
+}
+
+.completed-line,
+.active-line {
+  background: rgba(255, 255, 255, 0.8);
+}
+
+/* CONTENT */
+
+.review-content {
+  padding: 40px 0 70px;
+}
+
+.review-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 350px;
+  gap: 28px;
+  align-items: start;
+}
+
+.review-main {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+/* CARDS */
+
+.review-card {
+  background: white;
+  border: 1px solid #e3e8e5;
+  border-radius: 18px;
+  padding: 28px;
+  box-shadow: 0 8px 28px rgba(25, 45, 38, 0.05);
+}
+
+.card-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid #edf0ee;
+}
+
+.section-label {
+  display: block;
+  color: #1d5c48;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+}
+
+.card-heading h2,
+.price-card h2 {
+  margin: 7px 0 0;
+  font-size: 21px;
+  font-weight: 800;
+  color: #26332e;
+}
+
+/* BADGES */
+
+.status-badge,
+.document-badge {
+  padding: 7px 11px;
+  border-radius: 999px;
+  background: #edf5f1;
+  color: #1d5c48;
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+/* FLIGHT SUMMARY */
+
+.flight-summary {
+  padding-top: 24px;
+}
+
+.flight-route {
+  padding: 20px;
+  border-radius: 14px;
+  background: #f4f6f5;
+}
+
+.route-code {
+  display: block;
+  font-size: 27px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
+
+.route-label {
+  display: block;
+  margin-top: 5px;
+  color: #74817c;
+  font-size: 12px;
+}
+
+.flight-info {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 18px;
+  margin-top: 22px;
+}
+
+.flight-info > div {
+  padding: 16px;
+  border: 1px solid #e6ebe8;
+  border-radius: 12px;
+}
+
+.flight-info span,
+.detail-item span {
+  display: block;
+  margin-bottom: 7px;
+  color: #7a8580;
+  font-size: 12px;
+}
+
+.flight-info strong,
+.detail-item strong {
+  display: block;
+  color: #26332e;
+  font-size: 15px;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.flight-info small {
+  display: block;
+  margin-top: 3px;
+  color: #87918d;
+  font-size: 11px;
+}
+
+/* DETAILS */
+
+.details-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 22px 28px;
+  padding-top: 24px;
+}
+
+.detail-item {
+  min-width: 0;
+}
+
+.capitalize {
+  text-transform: capitalize;
+}
+
+.empty-message {
+  margin: 22px 0 0;
+  color: #7a8580;
+}
+
+/* SIDEBAR */
+
+.review-sidebar {
+  position: sticky;
+  top: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+/* PRICE */
+
+.price-card {
+  background: white;
+  border: 1px solid #dfe6e2;
+  border-radius: 18px;
+  padding: 28px;
+  box-shadow: 0 12px 35px rgba(25, 45, 38, 0.08);
+}
+
+.total-price {
+  margin-top: 22px;
+  color: #1d5c48;
+  font-size: 31px;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.price-divider {
+  height: 1px;
+  margin: 22px 0;
+  background: #e7ebe9;
+}
+
+.price-row,
+.price-total-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.price-row {
+  margin-top: 12px;
+  color: #6f7b76;
+  font-size: 13px;
+}
+
+.price-row strong {
+  color: #26332e;
+}
+
+.price-total-row {
+  color: #26332e;
+  font-size: 17px;
+}
+
+.price-total-row strong {
+  color: #1d5c48;
+  font-size: 21px;
+}
+
+/* CONFIRM BUTTON */
+
+.confirm-button {
+  width: 100%;
+  margin-top: 26px;
+  padding: 16px 20px;
+  border: 0;
+  border-radius: 12px;
+  background: #1d5c48;
+  color: white;
+  font-size: 15px;
+  font-weight: 800;
+  cursor: pointer;
+  transition:
+    transform 0.2s ease,
+    background 0.2s ease,
+    box-shadow 0.2s ease;
+}
+
+.confirm-button:hover:not(:disabled) {
+  background: #164938;
+  transform: translateY(-1px);
+  box-shadow: 0 8px 18px rgba(29, 92, 72, 0.2);
+}
+
+.confirm-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.secure-note {
+  margin: 14px 0 0;
+  color: #87918d;
+  font-size: 11px;
+  line-height: 1.6;
+  text-align: center;
+}
+
+/* IMPORTANT */
+
+.important-card {
+  display: flex;
+  gap: 13px;
+  padding: 18px;
+  border: 1px solid #e5e9e7;
+  border-radius: 15px;
+  background: white;
+}
+
+.important-icon {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: #1d5c48;
+  color: white;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.important-card h3 {
+  margin: 1px 0 5px;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.important-card p {
+  margin: 0;
+  color: #718079;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+/* BACK BUTTON */
+
+.back-button {
+  width: 100%;
+  padding: 13px 16px;
+  border: 1px solid #d7dfdb;
+  border-radius: 12px;
+  background: white;
+  color: #26332e;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.back-button:hover {
+  background: #f4f6f5;
+}
+
+/* ERROR */
+
+.booking-error {
+  padding: 16px;
+  border: 1px solid #f0caca;
+  border-radius: 13px;
+  background: #fff3f3;
+  color: #a83232;
+}
+
+.booking-error strong {
+  display: block;
+  font-size: 13px;
+}
+
+.booking-error p {
+  margin: 5px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* FOOTER */
+
+.review-footer {
+  padding: 28px 20px;
+  border-top: 1px solid #e0e5e2;
+  background: white;
+  text-align: center;
+}
+
+.review-footer p {
+  margin: 0;
+  color: #7c8782;
+  font-size: 12px;
+}
+
+/* TABLET */
+
+@media (max-width: 900px) {
+  .review-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .review-sidebar {
+    position: static;
+  }
+
+  .price-card {
+    order: 0;
+  }
+}
+
+/* MOBILE */
+
+@media (max-width: 640px) {
+  .review-container {
+    width: min(100% - 28px, 1180px);
+  }
+
+  .review-hero {
+    padding: 40px 0 34px;
+  }
+
+  .review-hero h1 {
+    font-size: 34px;
+  }
+
+  .review-progress {
+    margin-top: 28px;
+  }
+
+  .progress-item {
+    font-size: 11px;
+  }
+
+  .progress-line {
+    margin: 0 7px;
+  }
+
+  .progress-number {
+    width: 26px;
+    height: 26px;
+  }
+
+  .review-content {
+    padding: 24px 0 50px;
+  }
+
+  .review-card,
+  .price-card {
+    padding: 21px;
+    border-radius: 15px;
+  }
+
+  .card-heading {
+    gap: 12px;
+  }
+
+  .card-heading h2,
+  .price-card h2 {
+    font-size: 18px;
+  }
+
+  .status-badge,
+  .document-badge {
+    display: none;
+  }
+
+  .route-code {
+    font-size: 22px;
+  }
+
+  .flight-info {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .details-grid {
+    grid-template-columns: 1fr;
+    gap: 18px;
+  }
+
+  .total-price {
+    font-size: 27px;
+  }
+}
