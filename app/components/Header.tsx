@@ -1,6 +1,12 @@
+
+"use client";
+
 import Link from "next/link";
+import { useCurrency } from "./CurrencyProvider";
 
 export default function Header() {
+  const { currency, setCurrency } = useCurrency();
+
   return (
     <header className="site-header">
       <div className="header-container">
@@ -31,9 +37,25 @@ export default function Header() {
             Contact
           </Link>
 
+          {/* CURRENCY */}
+          <select
+            value={currency}
+            onChange={(event) =>
+              setCurrency(
+                event.target.value as "IDR" | "USD" | "EUR"
+              )
+            }
+            className="currency-selector"
+            aria-label="Select currency"
+          >
+            <option value="IDR">IDR</option>
+            <option value="USD">USD</option>
+            <option value="EUR">EUR</option>
+          </select>
+
           {/* BOOK FLIGHT */}
           <Link href="/flight" className="flight-btn">
-            ✈ Book Flight
+            Book Flight
           </Link>
         </nav>
 

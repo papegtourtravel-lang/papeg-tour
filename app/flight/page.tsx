@@ -1,7 +1,7 @@
-
 "use client";
 
 import { useState } from "react";
+import { useCurrency } from "../components/CurrencyProvider";
 
 type FlightSegment = {
   departing_at?: string;
@@ -53,7 +53,82 @@ type Passenger = {
   phone_number: string;
 };
 
+function convertFlightPrice(
+  amount: string | undefined,
+  sourceCurrency: string | undefined,
+  targetCurrency: "IDR" | "USD" | "EUR"
+) {
+  const value = Number(amount);
+
+  if (!Number.isFinite(value)) {
+    return null;
+  }
+
+  const source = (sourceCurrency || "").toUpperCase();
+
+  if (!source) {
+    return null;
+  }
+
+  const EUR_IDR = 20453.78;
+  const USD_IDR = 17000;
+
+  let idrValue: number;
+
+  if (source === "IDR") {
+    idrValue = value;
+  } else if (source === "USD") {
+    idrValue = value * USD_IDR;
+  } else if (source === "EUR") {
+    idrValue = value * EUR_IDR;
+  } else {
+    return null;
+  }
+
+  if (targetCurrency === "IDR") {
+    return idrValue;
+  }
+
+  if (targetCurrency === "USD") {
+    return idrValue / USD_IDR;
+  }
+
+  return idrValue / EUR_IDR;
+}
+
+function formatFlightPrice(
+  amount: string | undefined,
+  sourceCurrency: string | undefined,
+  targetCurrency: "IDR" | "USD" | "EUR"
+) {
+  const converted = convertFlightPrice(
+    amount,
+    sourceCurrency,
+    targetCurrency
+  );
+
+  if (converted === null) {
+    return "-";
+  }
+
+  return new Intl.NumberFormat(
+    targetCurrency === "IDR"
+      ? "id-ID"
+      : targetCurrency === "USD"
+      ? "en-US"
+      : "de-DE",
+    {
+      style: "currency",
+      currency: targetCurrency,
+      maximumFractionDigits:
+        targetCurrency === "IDR" ? 0 : 2,
+    }
+  ).format(converted);
+}
+
 export default function FlightPage() {
+  const { currency } = useCurrency();
+
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [departure, setDeparture] = useState("");
@@ -710,12 +785,11 @@ export default function FlightPage() {
                               "#26332e",
                           }}
                         >
-                          {
-                            offer.total_amount
-                          }{" "}
-                          {
-                            offer.total_currency
-                          }
+                          {formatFlightPrice(
+                            offer.total_amount,
+                            offer.total_currency,
+                            currency
+                          )}
                         </strong>
 
                         <br />

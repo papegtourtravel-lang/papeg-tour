@@ -1,7 +1,10 @@
+
 "use client";
 
 import { useEffect, useState } from "react";
 import "./payment.css";
+
+type Currency = "IDR" | "USD" | "EUR";
 
 type FlightOffer = {
   id?: string;
@@ -96,8 +99,25 @@ export default function FlightPaymentPage() {
   const [paymentAmount, setPaymentAmount] =
     useState<number | null>(null);
 
+  const [currency, setCurrency] =
+    useState<Currency>("IDR");
+
+  const [exchangeRate, setExchangeRate] =
+    useState<number | null>(null);
+
   useEffect(() => {
     try {
+      const savedCurrency =
+        localStorage.getItem("papeg_currency");
+
+      if (
+        savedCurrency === "IDR" ||
+        savedCurrency === "USD" ||
+        savedCurrency === "EUR"
+      ) {
+        setCurrency(savedCurrency);
+      }
+
       const savedFlight =
         sessionStorage.getItem("selectedFlight");
 
@@ -138,6 +158,43 @@ export default function FlightPaymentPage() {
     } finally {
       setLoading(false);
     }
+  }, []);
+
+  useEffect(() => {
+    function handleCurrencyChange() {
+      const savedCurrency =
+        localStorage.getItem("papeg_currency");
+
+      if (
+        savedCurrency === "IDR" ||
+        savedCurrency === "USD" ||
+        savedCurrency === "EUR"
+      ) {
+        setCurrency(savedCurrency);
+      }
+    }
+
+    window.addEventListener(
+      "papeg-currency-change",
+      handleCurrencyChange
+    );
+
+    window.addEventListener(
+      "storage",
+      handleCurrencyChange
+    );
+
+    return () => {
+      window.removeEventListener(
+        "papeg-currency-change",
+        handleCurrencyChange
+      );
+
+      window.removeEventListener(
+        "storage",
+        handleCurrencyChange
+      );
+    };
   }, []);
 
   function getFirstName() {
@@ -230,21 +287,142 @@ export default function FlightPaymentPage() {
     );
   }
 
-  function getPrice() {
+  function getOriginalAmount() {
     const amount =
       order?.total_amount ||
       selectedFlight?.total_amount;
 
-    const currency =
+    if (!amount) {
+      return null;
+    }
+
+    const numericAmount =
+      Number(amount);
+
+    if (
+      !Number.isFinite(
+        numericAmount
+      )
+    ) {
+      return null;
+    }
+
+    return numericAmount;
+  }
+
+  function getOriginalCurrency() {
+    return (
       order?.total_currency ||
       selectedFlight?.total_currency ||
-      "";
+      "EUR"
+    ).toUpperCase();
+  }
 
-    if (!amount) {
+  function getDisplayAmount() {
+    const originalAmount =
+      getOriginalAmount();
+
+    if (originalAmount === null) {
+      return null;
+    }
+
+    const originalCurrency =
+      getOriginalCurrency();
+
+    if (currency === originalCurrency) {
+      return originalAmount;
+    }
+
+    if (
+      originalCurrency === "IDR"
+    ) {
+      if (currency === "USD") {
+        return originalAmount / 17000;
+      }
+
+      if (currency === "EUR") {
+        return originalAmount / 20453.78;
+      }
+
+      return originalAmount;
+    }
+
+    if (
+      originalCurrency === "EUR"
+    ) {
+      if (currency === "IDR") {
+        return originalAmount * 20453.78;
+      }
+
+      if (currency === "USD") {
+        return (
+          originalAmount *
+          20453.78 /
+          17000
+        );
+      }
+
+      return originalAmount;
+    }
+
+    if (
+      originalCurrency === "USD"
+    ) {
+      if (currency === "IDR") {
+        return originalAmount * 17000;
+      }
+
+      if (currency === "EUR") {
+        return (
+          originalAmount *
+          17000 /
+          20453.78
+        );
+      }
+
+      return originalAmount;
+    }
+
+    return originalAmount;
+  }
+
+  function getCurrencyLabel() {
+    if (currency === "IDR") {
+      return "IDR";
+    }
+
+    if (currency === "USD") {
+      return "USD";
+    }
+
+    return "EUR";
+  }
+
+  function getFormattedPrice() {
+    const amount =
+      getDisplayAmount();
+
+    if (amount === null) {
       return "-";
     }
 
-    return `${amount} ${currency}`;
+    return new Intl.NumberFormat(
+      currency === "IDR"
+        ? "id-ID"
+        : currency === "USD"
+        ? "en-US"
+        : "de-DE",
+      {
+        style: "currency",
+        currency,
+        maximumFractionDigits:
+          currency === "IDR" ? 0 : 2,
+      }
+    ).format(amount);
+  }
+
+  function getPrice() {
+    return getFormattedPrice();
   }
 
   function getPaymentPrice() {
@@ -386,6 +564,12 @@ export default function FlightPaymentPage() {
         finalAmount
       );
 
+      setExchangeRate(
+        Number(
+          data?.payment?.exchangeRate
+        ) || null
+      );
+
       sessionStorage.setItem(
         "midtransPayment",
         JSON.stringify({
@@ -408,6 +592,13 @@ export default function FlightPaymentPage() {
           duffelCurrency:
             data?.duffel?.currency ||
             "",
+
+          displayCurrency:
+            currency,
+
+          exchangeRate:
+            data?.payment?.exchangeRate ||
+            null,
 
           paymentMethod,
         })

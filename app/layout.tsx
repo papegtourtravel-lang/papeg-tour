@@ -1,9 +1,11 @@
+
 import type { Metadata } from "next";
 import "./globals.css";
 
 import Header from "./components/Header";
 import Footer from "./components/Footer";
 import WhatsAppButton from "./components/WhatsAppButton";
+import CurrencyProvider from "./components/CurrencyProvider";
 
 export const metadata: Metadata = {
   title: "Papeg Tour & Travel | Discover Papua Highlands",
@@ -19,15 +21,17 @@ export default function RootLayout({
   return (
     <html lang="en" className="h-full">
       <body className="min-h-full flex flex-col">
-        <Header />
+        <CurrencyProvider>
+          <Header />
 
-        <main className="flex-1">
-          {children}
-        </main>
+          <main className="flex-1">
+            {children}
+          </main>
 
-        <Footer />
+          <Footer />
 
-        <WhatsAppButton />
+          <WhatsAppButton />
+        </CurrencyProvider>
       </body>
     </html>
   );
