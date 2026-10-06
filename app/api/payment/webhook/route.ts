@@ -437,22 +437,65 @@ export async function POST(req: Request) {
       for (const email of uniqueEmails) {
         try {
           await sendTicketEmail({
-            to: email,
-            bookingReference:
-              finalOrder?.booking_reference ||
-              null,
-            orderId:
-              finalOrder?.id ||
-              duffelOrderId,
-            passengers,
-            documents,
-            totalAmount:
-              finalOrder?.total_amount ??
-              null,
-            totalCurrency:
-              finalOrder?.total_currency ??
-              null,
-          });
+  to: email,
+
+  bookingReference:
+    finalOrder?.booking_reference ||
+    null,
+
+  orderId:
+    finalOrder?.id ||
+    duffelOrderId,
+
+  passengers,
+
+  documents,
+
+  slices:
+    finalOrder?.slices ??
+    [],
+
+  totalAmount:
+    finalOrder?.total_amount ??
+    null,
+
+  totalCurrency:
+    finalOrder?.total_currency ??
+    null,
+
+  baseAmount:
+    finalOrder?.base_amount ??
+    null,
+
+  baseCurrency:
+    finalOrder?.base_currency ??
+    null,
+
+  taxAmount:
+    finalOrder?.tax_amount ??
+    null,
+
+  taxCurrency:
+    finalOrder?.tax_currency ??
+    null,
+
+  bookingType:
+    finalOrder?.type ??
+    null,
+
+  bookingStatus:
+    finalOrder?.status ??
+    null,
+
+  createdAt:
+    finalOrder?.created_at ??
+    null,
+
+  paidAt:
+    finalOrder?.payment_status
+      ?.paid_at ??
+    null,
+});
 
           console.log(
             "Ticket email berhasil dikirim ke:",
