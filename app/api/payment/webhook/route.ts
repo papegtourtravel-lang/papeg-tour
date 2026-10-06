@@ -1,5 +1,7 @@
+
 import { NextResponse } from "next/server";
 import crypto from "crypto";
+import { sendTicketEmail } from "@/lib/sendTicketEmail";
 
 export async function POST(req: Request) {
   try {
@@ -56,7 +58,9 @@ export async function POST(req: Request) {
       .digest("hex");
 
     if (expectedSignature !== signature_key) {
-      console.error("Invalid Midtrans signature");
+      console.error(
+        "Invalid Midtrans signature"
+      );
 
       return NextResponse.json(
         {
@@ -82,9 +86,13 @@ export async function POST(req: Request) {
       fraud_status === "accept"
     ) {
       paymentStatus = "paid";
-    } else if (transaction_status === "pending") {
+    } else if (
+      transaction_status === "pending"
+    ) {
       paymentStatus = "pending";
-    } else if (transaction_status === "expire") {
+    } else if (
+      transaction_status === "expire"
+    ) {
       paymentStatus = "expired";
     } else if (
       transaction_status === "cancel" ||
@@ -93,13 +101,39 @@ export async function POST(req: Request) {
       paymentStatus = "failed";
     }
 
-    console.log("=== MIDTRANS PAYMENT ===");
-    console.log("Order ID:", order_id);
-    console.log("Amount:", gross_amount);
-    console.log("Payment Type:", payment_type);
-    console.log("Transaction Status:", transaction_status);
-    console.log("Fraud Status:", fraud_status);
-    console.log("Payment Status:", paymentStatus);
+    console.log(
+      "=== MIDTRANS PAYMENT ==="
+    );
+
+    console.log(
+      "Order ID:",
+      order_id
+    );
+
+    console.log(
+      "Amount:",
+      gross_amount
+    );
+
+    console.log(
+      "Payment Type:",
+      payment_type
+    );
+
+    console.log(
+      "Transaction Status:",
+      transaction_status
+    );
+
+    console.log(
+      "Fraud Status:",
+      fraud_status
+    );
+
+    console.log(
+      "Payment Status:",
+      paymentStatus
+    );
 
     // ==============================
     // ONLY PROCESS SUCCESSFUL PAYMENT
@@ -116,14 +150,18 @@ export async function POST(req: Request) {
     // CHECK DUFFEL TOKEN
     // ==============================
 
-    const duffelToken = process.env.DUFFEL_ACCESS_TOKEN;
+    const duffelToken =
+      process.env.DUFFEL_ACCESS_TOKEN;
 
     if (!duffelToken) {
-      console.error("DUFFEL_ACCESS_TOKEN belum diset");
+      console.error(
+        "DUFFEL_ACCESS_TOKEN belum diset"
+      );
 
       return NextResponse.json(
         {
-          error: "DUFFEL_ACCESS_TOKEN belum diset",
+          error:
+            "DUFFEL_ACCESS_TOKEN belum diset",
         },
         { status: 500 }
       );
@@ -144,9 +182,8 @@ export async function POST(req: Request) {
       );
     }
 
-    const duffelOrderId = order_id.substring(
-      prefix.length
-    );
+    const duffelOrderId =
+      order_id.substring(prefix.length);
 
     console.log(
       "Duffel Order ID:",
@@ -172,7 +209,8 @@ export async function POST(req: Request) {
       }
     );
 
-    const orderData = await orderResponse.json();
+    const orderData =
+      await orderResponse.json();
 
     if (!orderResponse.ok) {
       console.error(
@@ -182,19 +220,22 @@ export async function POST(req: Request) {
 
       return NextResponse.json(
         {
-          error: "Gagal mengambil order Duffel",
+          error:
+            "Gagal mengambil order Duffel",
           details: orderData,
         },
         { status: 502 }
       );
     }
 
-    const duffelOrder = orderData?.data;
+    const duffelOrder =
+      orderData?.data;
 
     if (!duffelOrder) {
       return NextResponse.json(
         {
-          error: "Order Duffel tidak ditemukan",
+          error:
+            "Order Duffel tidak ditemukan",
         },
         { status: 404 }
       );
@@ -231,7 +272,8 @@ export async function POST(req: Request) {
         headers: {
           Authorization: `Bearer ${duffelToken}`,
           "Duffel-Version": "v2",
-          "Content-Type": "application/json",
+          "Content-Type":
+            "application/json",
           Accept: "application/json",
         },
         body: JSON.stringify({
@@ -239,8 +281,10 @@ export async function POST(req: Request) {
             order_id: duffelOrderId,
             payment: {
               type: "balance",
-              amount: duffelOrder.total_amount,
-              currency: duffelOrder.total_currency,
+              amount:
+                duffelOrder.total_amount,
+              currency:
+                duffelOrder.total_currency,
             },
           },
         }),
@@ -258,7 +302,8 @@ export async function POST(req: Request) {
 
       return NextResponse.json(
         {
-          error: "Pembayaran Duffel gagal",
+          error:
+            "Pembayaran Duffel gagal",
           details: paymentData,
         },
         { status: 502 }
@@ -307,7 +352,8 @@ export async function POST(req: Request) {
       });
     }
 
-    const finalOrder = finalData?.data;
+    const finalOrder =
+      finalData?.data;
 
     console.log(
       "=== DUFFEL FINAL ORDER ==="
@@ -334,16 +380,120 @@ export async function POST(req: Request) {
       finalOrder?.documents
     );
 
+    // ==============================
+    // SEND ELECTRONIC TICKET BY EMAIL
+    // ==============================
+
+    const passengers: Array<{
+      email?: string;
+      given_name?: string;
+      family_name?: string;
+    }> = Array.isArray(
+      finalOrder?.passengers
+    )
+      ? finalOrder.passengers
+      : [];
+
+    const passengerEmails: string[] =
+      passengers
+        .map(
+          (passenger) =>
+            passenger.email
+        )
+        .filter(
+          (
+            email
+          ): email is string =>
+            typeof email ===
+              "string" &&
+            email.trim().length > 0
+        );
+
+    const uniqueEmails: string[] = [
+      ...new Set(passengerEmails),
+    ];
+
+    const documents: Array<{
+      type?: string;
+      unique_identifier?: string;
+      passenger_ids?: string[];
+    }> = Array.isArray(
+      finalOrder?.documents
+    )
+      ? finalOrder.documents
+      : [];
+
+    const electronicTicket =
+      documents.find(
+        (document) =>
+          document.type ===
+          "electronic_ticket"
+      );
+
+    if (
+      uniqueEmails.length > 0 &&
+      electronicTicket
+    ) {
+      for (const email of uniqueEmails) {
+        try {
+          await sendTicketEmail({
+            to: email,
+            bookingReference:
+              finalOrder?.booking_reference ||
+              null,
+            orderId:
+              finalOrder?.id ||
+              duffelOrderId,
+            passengers,
+            documents,
+            totalAmount:
+              finalOrder?.total_amount ??
+              null,
+            totalCurrency:
+              finalOrder?.total_currency ??
+              null,
+          });
+
+          console.log(
+            "Ticket email berhasil dikirim ke:",
+            email
+          );
+        } catch (emailError) {
+          console.error(
+            "Gagal mengirim ticket email ke:",
+            email,
+            emailError
+          );
+        }
+      }
+    } else {
+      console.log(
+        "Ticket email belum dikirim:",
+        {
+          emails:
+            uniqueEmails.length,
+          electronicTicket:
+            !!electronicTicket,
+        }
+      );
+    }
+
+    // ==============================
+    // WEBHOOK SUCCESS RESPONSE
+    // ==============================
+
     return NextResponse.json({
       success: true,
       payment_status: "paid",
       duffel_payment: "paid",
       order_id: duffelOrderId,
       booking_reference:
-        finalOrder?.booking_reference || null,
+        finalOrder?.booking_reference ||
+        null,
       awaiting_payment:
         finalOrder?.payment_status
-          ?.awaiting_payment ?? null,
+          ?.awaiting_payment ??
+        null,
       documents:
         finalOrder?.documents || [],
     });
@@ -355,7 +505,8 @@ export async function POST(req: Request) {
 
     return NextResponse.json(
       {
-        error: "Webhook processing failed",
+        error:
+          "Webhook processing failed",
       },
       { status: 500 }
     );

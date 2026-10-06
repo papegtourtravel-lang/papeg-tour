@@ -3,6 +3,10 @@
 
 import { useEffect, useState } from "react";
 import "./review.css";
+import {
+  useCurrency,
+  type Currency,
+} from "../../components/CurrencyProvider";
 
 type FlightSegment = {
   departing_at?: string;
@@ -77,7 +81,12 @@ type BookingOrder = {
   created_at?: string;
 };
 
+const EUR_IDR = 20453.78;
+const USD_IDR = 17000;
+
 export default function FlightReviewPage() {
+  const { currency } = useCurrency();
+
   const [selectedFlight, setSelectedFlight] =
     useState<FlightOffer | null>(null);
 
@@ -256,14 +265,150 @@ export default function FlightReviewPage() {
       );
   }
 
+  /*
+   * Mendapatkan harga asli dari booking.
+   */
+  function getOriginalAmount() {
+    const amount =
+      order?.total_amount ||
+      selectedFlight?.total_amount;
+
+    if (!amount) {
+      return null;
+    }
+
+    const numericAmount =
+      Number(amount);
+
+    if (!Number.isFinite(numericAmount)) {
+      return null;
+    }
+
+    return numericAmount;
+  }
+
+  /*
+   * Mendapatkan currency asli dari booking.
+   */
+  function getOriginalCurrency() {
+    return (
+      order?.total_currency ||
+      selectedFlight?.total_currency ||
+      "IDR"
+    ).toUpperCase();
+  }
+
+  /*
+   * Mengubah harga ke currency yang
+   * dipilih pelanggan di Header.
+   */
+  function convertAmount(
+    amount: number,
+    fromCurrency: string,
+    toCurrency: Currency
+  ) {
+    const from =
+      fromCurrency.toUpperCase();
+
+    if (from === toCurrency) {
+      return amount;
+    }
+
+    // IDR → USD / EUR
+    if (from === "IDR") {
+      if (toCurrency === "USD") {
+        return amount / USD_IDR;
+      }
+
+      if (toCurrency === "EUR") {
+        return amount / EUR_IDR;
+      }
+
+      return amount;
+    }
+
+    // EUR → IDR / USD
+    if (from === "EUR") {
+      if (toCurrency === "IDR") {
+        return amount * EUR_IDR;
+      }
+
+      if (toCurrency === "USD") {
+        return (
+          amount *
+          EUR_IDR /
+          USD_IDR
+        );
+      }
+
+      return amount;
+    }
+
+    // USD → IDR / EUR
+    if (from === "USD") {
+      if (toCurrency === "IDR") {
+        return amount * USD_IDR;
+      }
+
+      if (toCurrency === "EUR") {
+        return (
+          amount *
+          USD_IDR /
+          EUR_IDR
+        );
+      }
+
+      return amount;
+    }
+
+    return amount;
+  }
+
+  /*
+   * Harga yang ditampilkan kepada pelanggan.
+   */
+  function getDisplayAmount() {
+    const originalAmount =
+      getOriginalAmount();
+
+    if (originalAmount === null) {
+      return null;
+    }
+
+    const originalCurrency =
+      getOriginalCurrency();
+
+    return convertAmount(
+      originalAmount,
+      originalCurrency,
+      currency
+    );
+  }
+
+  /*
+   * Format harga sesuai currency pilihan.
+   */
   function getPrice() {
-    if (!selectedFlight?.total_amount) {
+    const amount =
+      getDisplayAmount();
+
+    if (amount === null) {
       return "-";
     }
 
-    return `${selectedFlight.total_amount} ${
-      selectedFlight.total_currency || ""
-    }`;
+    return new Intl.NumberFormat(
+      currency === "IDR"
+        ? "id-ID"
+        : currency === "USD"
+        ? "en-US"
+        : "de-DE",
+      {
+        style: "currency",
+        currency,
+        maximumFractionDigits:
+          currency === "IDR" ? 0 : 2,
+      }
+    ).format(amount);
   }
 
   function formatDate(date?: string) {

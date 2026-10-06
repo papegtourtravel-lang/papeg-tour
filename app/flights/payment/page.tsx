@@ -1,10 +1,11 @@
-
 "use client";
 
 import { useEffect, useState } from "react";
 import "./payment.css";
-
-type Currency = "IDR" | "USD" | "EUR";
+import {
+  useCurrency,
+  type Currency,
+} from "../../components/CurrencyProvider";
 
 type FlightOffer = {
   id?: string;
@@ -71,7 +72,12 @@ type BookingOrder = {
   created_at?: string;
 };
 
+const EUR_IDR = 20453.78;
+const USD_IDR = 17000;
+
 export default function FlightPaymentPage() {
+  const { currency } = useCurrency();
+
   const [selectedFlight, setSelectedFlight] =
     useState<FlightOffer | null>(null);
 
@@ -93,31 +99,28 @@ export default function FlightPaymentPage() {
   const [paymentSubmitted, setPaymentSubmitted] =
     useState(false);
 
+  const [verifyingPayment, setVerifyingPayment] =
+    useState(false);
+
+  const [verificationMessage, setVerificationMessage] =
+    useState(
+      "We are verifying your payment and preparing your ticket."
+    );
+
   const [error, setError] =
     useState("");
 
   const [paymentAmount, setPaymentAmount] =
     useState<number | null>(null);
 
-  const [currency, setCurrency] =
-    useState<Currency>("IDR");
-
   const [exchangeRate, setExchangeRate] =
     useState<number | null>(null);
 
+  /*
+   * Restore booking information from sessionStorage.
+   */
   useEffect(() => {
     try {
-      const savedCurrency =
-        localStorage.getItem("papeg_currency");
-
-      if (
-        savedCurrency === "IDR" ||
-        savedCurrency === "USD" ||
-        savedCurrency === "EUR"
-      ) {
-        setCurrency(savedCurrency);
-      }
-
       const savedFlight =
         sessionStorage.getItem("selectedFlight");
 
@@ -126,6 +129,9 @@ export default function FlightPaymentPage() {
 
       const savedOrder =
         sessionStorage.getItem("bookingOrder");
+
+      const savedPayment =
+        sessionStorage.getItem("midtransPayment");
 
       if (savedFlight) {
         setSelectedFlight(
@@ -151,6 +157,37 @@ export default function FlightPaymentPage() {
           JSON.parse(savedOrder)
         );
       }
+
+      if (savedPayment) {
+        const parsedPayment =
+          JSON.parse(savedPayment);
+
+        if (
+          Number.isFinite(
+            Number(parsedPayment?.amount)
+          )
+        ) {
+          setPaymentAmount(
+            Number(parsedPayment.amount)
+          );
+        }
+
+        if (
+          Number.isFinite(
+            Number(parsedPayment?.exchangeRate)
+          )
+        ) {
+          setExchangeRate(
+            Number(parsedPayment.exchangeRate)
+          );
+        }
+
+        if (parsedPayment?.paymentMethod) {
+          setPaymentMethod(
+            parsedPayment.paymentMethod
+          );
+        }
+      }
     } catch {
       setError(
         "Unable to restore your booking information."
@@ -160,40 +197,241 @@ export default function FlightPaymentPage() {
     }
   }, []);
 
+  /*
+   * Handle the return from Midtrans.
+   *
+   * Midtrans sends the browser back to:
+   *
+   * /flights/payment?order_id=PAPEG-ord_...&
+   * status_code=200&
+   * transaction_status=settlement
+   *
+   * We then:
+   * 1. Read the Midtrans order ID.
+   * 2. Convert PAPEG-ord_... to ord_...
+   * 3. Check the Duffel order.
+   * 4. Wait until Duffel confirms payment.
+   * 5. Redirect to Confirmation.
+   */
   useEffect(() => {
-    function handleCurrencyChange() {
-      const savedCurrency =
-        localStorage.getItem("papeg_currency");
+    const params =
+      new URLSearchParams(
+        window.location.search
+      );
 
+    const midtransOrderId =
+      params.get("order_id");
+
+    const transactionStatus =
+      params.get("transaction_status");
+
+    const statusCode =
+      params.get("status_code");
+
+    if (!midtransOrderId) {
+      return;
+    }
+
+    const successfulStatus =
+      transactionStatus === "settlement" ||
+      transactionStatus === "capture";
+
+    if (!successfulStatus) {
       if (
-        savedCurrency === "IDR" ||
-        savedCurrency === "USD" ||
-        savedCurrency === "EUR"
+        transactionStatus === "deny" ||
+        transactionStatus === "cancel" ||
+        transactionStatus === "expire"
       ) {
-        setCurrency(savedCurrency);
+        setError(
+          `Payment was not completed. Transaction status: ${transactionStatus}.`
+        );
+      }
+
+      return;
+    }
+
+    const prefix = "PAPEG-";
+
+    if (
+      !midtransOrderId.startsWith(prefix)
+    ) {
+      setError(
+        "Invalid Papeg payment order ID."
+      );
+      return;
+    }
+
+    const duffelOrderId =
+      midtransOrderId.substring(
+        prefix.length
+      );
+
+    if (!duffelOrderId) {
+      setError(
+        "Duffel order ID could not be determined."
+      );
+      return;
+    }
+
+    let cancelled = false;
+    let attempts = 0;
+
+    const maxAttempts = 20;
+
+    setVerifyingPayment(true);
+    setError("");
+
+    if (statusCode === "200") {
+      setVerificationMessage(
+        "Payment received. Verifying your ticket..."
+      );
+    } else {
+      setVerificationMessage(
+        "Payment received. Preparing your booking..."
+      );
+    }
+
+    async function verifyDuffelPayment() {
+      if (cancelled) {
+        return;
+      }
+
+      attempts += 1;
+
+      try {
+        const response =
+          await fetch(
+            `/api/flights/order/${encodeURIComponent(
+              duffelOrderId
+            )}`,
+            {
+              method: "GET",
+              cache: "no-store",
+            }
+          );
+
+        const data =
+          await response.json();
+
+        if (!response.ok) {
+          throw new Error(
+            data?.error ||
+            "Unable to verify the booking."
+          );
+        }
+
+        const duffelOrder =
+          data?.order;
+
+        const awaitingPayment =
+          duffelOrder
+            ?.payment_status
+            ?.awaiting_payment;
+
+        const documents =
+          duffelOrder?.documents || [];
+
+        const hasElectronicTicket =
+          Array.isArray(documents) &&
+          documents.some(
+            (document: {
+              type?: string;
+            }) =>
+              document?.type ===
+              "electronic_ticket"
+          );
+
+        /*
+         * Duffel confirms that payment is complete
+         * when awaiting_payment becomes false.
+         *
+         * An electronic ticket is an additional
+         * confirmation that ticket issuance happened.
+         */
+        if (
+          awaitingPayment === false ||
+          hasElectronicTicket
+        ) {
+          if (cancelled) {
+            return;
+          }
+
+          setVerificationMessage(
+            "Payment verified. Opening your booking confirmation..."
+          );
+
+          /*
+           * Small delay so the user can see the
+           * successful verification message.
+           */
+          setTimeout(() => {
+            if (!cancelled) {
+              window.location.href =
+                `/flights/confirmation?orderId=${encodeURIComponent(
+                  duffelOrderId
+                )}`;
+            }
+          }, 800);
+
+          return;
+        }
+
+        /*
+         * Duffel still reports awaiting payment.
+         * This can happen for a few seconds while
+         * the Midtrans webhook is processing.
+         */
+        if (attempts < maxAttempts) {
+          setVerificationMessage(
+            `Payment received. Waiting for ticket confirmation... (${attempts}/${maxAttempts})`
+          );
+
+          setTimeout(
+            verifyDuffelPayment,
+            2000
+          );
+
+          return;
+        }
+
+        throw new Error(
+          "Payment was received, but ticket confirmation is taking longer than expected. Please check your booking confirmation shortly."
+        );
+      } catch (verificationError) {
+        if (cancelled) {
+          return;
+        }
+
+        /*
+         * Retry temporary verification errors.
+         */
+        if (attempts < maxAttempts) {
+          setVerificationMessage(
+            `Verifying your booking... (${attempts}/${maxAttempts})`
+          );
+
+          setTimeout(
+            verifyDuffelPayment,
+            2000
+          );
+
+          return;
+        }
+
+        setVerifyingPayment(false);
+
+        setError(
+          verificationError instanceof Error
+            ? verificationError.message
+            : "Payment verification failed."
+        );
       }
     }
 
-    window.addEventListener(
-      "papeg-currency-change",
-      handleCurrencyChange
-    );
-
-    window.addEventListener(
-      "storage",
-      handleCurrencyChange
-    );
+    verifyDuffelPayment();
 
     return () => {
-      window.removeEventListener(
-        "papeg-currency-change",
-        handleCurrencyChange
-      );
-
-      window.removeEventListener(
-        "storage",
-        handleCurrencyChange
-      );
+      cancelled = true;
     };
   }, []);
 
@@ -299,11 +537,7 @@ export default function FlightPaymentPage() {
     const numericAmount =
       Number(amount);
 
-    if (
-      !Number.isFinite(
-        numericAmount
-      )
-    ) {
+    if (!Number.isFinite(numericAmount)) {
       return null;
     }
 
@@ -314,8 +548,70 @@ export default function FlightPaymentPage() {
     return (
       order?.total_currency ||
       selectedFlight?.total_currency ||
-      "EUR"
+      "IDR"
     ).toUpperCase();
+  }
+
+  function convertAmount(
+    amount: number,
+    fromCurrency: string,
+    toCurrency: Currency
+  ) {
+    const from =
+      fromCurrency.toUpperCase();
+
+    if (from === toCurrency) {
+      return amount;
+    }
+
+    // IDR → USD / EUR
+    if (from === "IDR") {
+      if (toCurrency === "USD") {
+        return amount / USD_IDR;
+      }
+
+      if (toCurrency === "EUR") {
+        return amount / EUR_IDR;
+      }
+
+      return amount;
+    }
+
+    // EUR → IDR / USD
+    if (from === "EUR") {
+      if (toCurrency === "IDR") {
+        return amount * EUR_IDR;
+      }
+
+      if (toCurrency === "USD") {
+        return (
+          amount *
+          EUR_IDR /
+          USD_IDR
+        );
+      }
+
+      return amount;
+    }
+
+    // USD → IDR / EUR
+    if (from === "USD") {
+      if (toCurrency === "IDR") {
+        return amount * USD_IDR;
+      }
+
+      if (toCurrency === "EUR") {
+        return (
+          amount *
+          USD_IDR /
+          EUR_IDR
+        );
+      }
+
+      return amount;
+    }
+
+    return amount;
   }
 
   function getDisplayAmount() {
@@ -329,73 +625,11 @@ export default function FlightPaymentPage() {
     const originalCurrency =
       getOriginalCurrency();
 
-    if (currency === originalCurrency) {
-      return originalAmount;
-    }
-
-    if (
-      originalCurrency === "IDR"
-    ) {
-      if (currency === "USD") {
-        return originalAmount / 17000;
-      }
-
-      if (currency === "EUR") {
-        return originalAmount / 20453.78;
-      }
-
-      return originalAmount;
-    }
-
-    if (
-      originalCurrency === "EUR"
-    ) {
-      if (currency === "IDR") {
-        return originalAmount * 20453.78;
-      }
-
-      if (currency === "USD") {
-        return (
-          originalAmount *
-          20453.78 /
-          17000
-        );
-      }
-
-      return originalAmount;
-    }
-
-    if (
-      originalCurrency === "USD"
-    ) {
-      if (currency === "IDR") {
-        return originalAmount * 17000;
-      }
-
-      if (currency === "EUR") {
-        return (
-          originalAmount *
-          17000 /
-          20453.78
-        );
-      }
-
-      return originalAmount;
-    }
-
-    return originalAmount;
-  }
-
-  function getCurrencyLabel() {
-    if (currency === "IDR") {
-      return "IDR";
-    }
-
-    if (currency === "USD") {
-      return "USD";
-    }
-
-    return "EUR";
+    return convertAmount(
+      originalAmount,
+      originalCurrency,
+      currency
+    );
   }
 
   function getFormattedPrice() {
@@ -425,10 +659,12 @@ export default function FlightPaymentPage() {
     return getFormattedPrice();
   }
 
+  /*
+   * Midtrans selalu menerima pembayaran
+   * dalam IDR.
+   */
   function getPaymentPrice() {
-    if (
-      paymentAmount === null
-    ) {
+    if (paymentAmount === null) {
       return "Calculating...";
     }
 
@@ -536,9 +772,7 @@ export default function FlightPaymentPage() {
         );
       }
 
-      if (
-        !data.redirect_url
-      ) {
+      if (!data.redirect_url) {
         throw new Error(
           "Midtrans did not return a checkout URL."
         );
@@ -617,12 +851,126 @@ export default function FlightPaymentPage() {
     }
   }
 
+  /*
+   * Payment verification screen.
+   *
+   * This is shown when the user has returned
+   * from Midtrans with a successful transaction.
+   */
+  if (verifyingPayment) {
+    return (
+      <main className="payment-page">
+
+        <section className="payment-hero">
+          <div className="payment-container">
+
+            <div className="payment-brand">
+              PAPEG TOUR & TRAVEL
+            </div>
+
+            <h1>
+              Payment Successful
+            </h1>
+
+            <p>
+              Your payment has been received.
+              We are now verifying your booking.
+            </p>
+
+          </div>
+        </section>
+
+        <section className="payment-content">
+
+          <div className="payment-container">
+
+            <div className="success-card">
+
+              <div className="success-icon">
+                ✓
+              </div>
+
+              <span className="section-label">
+                PAYMENT VERIFIED
+              </span>
+
+              <h2>
+                Preparing Your Ticket
+              </h2>
+
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "center",
+                  margin: "24px 0",
+                }}
+              >
+                <div
+                  style={{
+                    width: "48px",
+                    height: "48px",
+                    border: "4px solid #dce8e2",
+                    borderTopColor: "#1d5c48",
+                    borderRadius: "50%",
+                    animation:
+                      "papeg-spin 1s linear infinite",
+                  }}
+                />
+              </div>
+
+              <p>
+                {verificationMessage}
+              </p>
+
+              <p
+                style={{
+                  marginTop: "12px",
+                  fontSize: "14px",
+                  color: "#6b746f",
+                }}
+              >
+                Please do not close this page.
+                You will be redirected to your
+                booking confirmation automatically.
+              </p>
+
+              <style jsx>{`
+                @keyframes papeg-spin {
+                  from {
+                    transform: rotate(0deg);
+                  }
+
+                  to {
+                    transform: rotate(360deg);
+                  }
+                }
+              `}</style>
+
+            </div>
+
+          </div>
+
+        </section>
+
+        <footer className="payment-footer">
+          <p>
+            Papeg Tour & Travel • Papua Highlands • Indonesia
+          </p>
+        </footer>
+
+      </main>
+    );
+  }
+
   if (loading) {
     return (
       <main className="payment-page">
         <section className="payment-content">
+
           <div className="payment-container">
+
             <div className="payment-card">
+
               <h2>
                 Loading payment details...
               </h2>
@@ -631,8 +979,11 @@ export default function FlightPaymentPage() {
                 Please wait while we restore
                 your booking information.
               </p>
+
             </div>
+
           </div>
+
         </section>
       </main>
     );
@@ -641,8 +992,11 @@ export default function FlightPaymentPage() {
   if (!selectedFlight || !order) {
     return (
       <main className="payment-page">
+
         <section className="payment-content">
+
           <div className="payment-container">
+
             <div className="payment-card">
 
               <span className="section-label">
@@ -670,8 +1024,11 @@ export default function FlightPaymentPage() {
               </button>
 
             </div>
+
           </div>
+
         </section>
+
       </main>
     );
   }
@@ -681,6 +1038,7 @@ export default function FlightPaymentPage() {
       <main className="payment-page">
 
         <section className="payment-hero">
+
           <div className="payment-container">
 
             <div className="payment-brand">
@@ -698,9 +1056,11 @@ export default function FlightPaymentPage() {
             </p>
 
           </div>
+
         </section>
 
         <section className="payment-content">
+
           <div className="payment-container">
 
             <div className="success-card">
@@ -785,6 +1145,7 @@ export default function FlightPaymentPage() {
             </div>
 
           </div>
+
         </section>
 
         <footer className="payment-footer">
@@ -882,6 +1243,7 @@ export default function FlightPaymentPage() {
               <div className="card-heading">
 
                 <div>
+
                   <span className="section-label">
                     BOOKING
                   </span>
@@ -889,6 +1251,7 @@ export default function FlightPaymentPage() {
                   <h2>
                     Booking Information
                   </h2>
+
                 </div>
 
                 <div className="status-badge">
@@ -900,6 +1263,7 @@ export default function FlightPaymentPage() {
               <div className="details-grid">
 
                 <div className="detail-item">
+
                   <span>
                     Booking Reference
                   </span>
@@ -909,9 +1273,11 @@ export default function FlightPaymentPage() {
                       order.id ||
                       "-"}
                   </strong>
+
                 </div>
 
                 <div className="detail-item">
+
                   <span>
                     Order ID
                   </span>
@@ -919,9 +1285,11 @@ export default function FlightPaymentPage() {
                   <strong>
                     {order.id || "-"}
                   </strong>
+
                 </div>
 
                 <div className="detail-item">
+
                   <span>
                     Route
                   </span>
@@ -929,9 +1297,11 @@ export default function FlightPaymentPage() {
                   <strong>
                     {getRoute()}
                   </strong>
+
                 </div>
 
                 <div className="detail-item">
+
                   <span>
                     Airline
                   </span>
@@ -939,6 +1309,7 @@ export default function FlightPaymentPage() {
                   <strong>
                     {getAirline()}
                   </strong>
+
                 </div>
 
               </div>
@@ -959,6 +1330,7 @@ export default function FlightPaymentPage() {
                 <div className="details-grid">
 
                   <div className="detail-item">
+
                     <span>
                       Full Name
                     </span>
@@ -966,9 +1338,11 @@ export default function FlightPaymentPage() {
                     <strong>
                       {getFullName()}
                     </strong>
+
                   </div>
 
                   <div className="detail-item">
+
                     <span>
                       Date of Birth
                     </span>
@@ -978,9 +1352,11 @@ export default function FlightPaymentPage() {
                         passenger.born_on ||
                         "-"}
                     </strong>
+
                   </div>
 
                   <div className="detail-item">
+
                     <span>
                       Email
                     </span>
@@ -988,9 +1364,11 @@ export default function FlightPaymentPage() {
                     <strong>
                       {getEmail()}
                     </strong>
+
                   </div>
 
                   <div className="detail-item">
+
                     <span>
                       WhatsApp
                     </span>
@@ -998,9 +1376,11 @@ export default function FlightPaymentPage() {
                     <strong>
                       {getWhatsApp()}
                     </strong>
+
                   </div>
 
                   <div className="detail-item">
+
                     <span>
                       Passport
                     </span>
@@ -1008,6 +1388,7 @@ export default function FlightPaymentPage() {
                     <strong>
                       {getPassport()}
                     </strong>
+
                   </div>
 
                 </div>
@@ -1033,6 +1414,7 @@ export default function FlightPaymentPage() {
               <div className="flight-box">
 
                 <div>
+
                   <span>
                     Route
                   </span>
@@ -1040,9 +1422,11 @@ export default function FlightPaymentPage() {
                   <strong>
                     {getRoute()}
                   </strong>
+
                 </div>
 
                 <div>
+
                   <span>
                     Airline
                   </span>
@@ -1050,9 +1434,11 @@ export default function FlightPaymentPage() {
                   <strong>
                     {getAirline()}
                   </strong>
+
                 </div>
 
                 <div>
+
                   <span>
                     Flight
                   </span>
@@ -1060,9 +1446,11 @@ export default function FlightPaymentPage() {
                   <strong>
                     {getFlightNumber()}
                   </strong>
+
                 </div>
 
                 <div>
+
                   <span>
                     Departure
                   </span>
@@ -1075,6 +1463,7 @@ export default function FlightPaymentPage() {
                         ?.departing_at
                     )}
                   </strong>
+
                 </div>
 
               </div>
@@ -1123,6 +1512,7 @@ export default function FlightPaymentPage() {
                   />
 
                   <div>
+
                     <strong>
                       Bank Transfer
                     </strong>
@@ -1130,6 +1520,7 @@ export default function FlightPaymentPage() {
                     <span>
                       Pay via bank transfer.
                     </span>
+
                   </div>
 
                 </label>
@@ -1159,6 +1550,7 @@ export default function FlightPaymentPage() {
                   />
 
                   <div>
+
                     <strong>
                       Virtual Account
                     </strong>
@@ -1166,6 +1558,7 @@ export default function FlightPaymentPage() {
                     <span>
                       Pay using a virtual account.
                     </span>
+
                   </div>
 
                 </label>
@@ -1195,6 +1588,7 @@ export default function FlightPaymentPage() {
                   />
 
                   <div>
+
                     <strong>
                       Credit / Debit Card
                     </strong>
@@ -1202,6 +1596,7 @@ export default function FlightPaymentPage() {
                     <span>
                       Pay using a payment card.
                     </span>
+
                   </div>
 
                 </label>
@@ -1254,6 +1649,7 @@ export default function FlightPaymentPage() {
               <div className="price-divider" />
 
               <div className="price-row">
+
                 <span>
                   Flight
                 </span>
@@ -1261,9 +1657,11 @@ export default function FlightPaymentPage() {
                 <strong>
                   {getPrice()}
                 </strong>
+
               </div>
 
               <div className="price-row">
+
                 <span>
                   Passenger
                 </span>
@@ -1271,11 +1669,13 @@ export default function FlightPaymentPage() {
                 <strong>
                   1 Adult
                 </strong>
+
               </div>
 
               <div className="price-divider" />
 
               <div className="price-total-row">
+
                 <span>
                   Total
                 </span>
@@ -1283,6 +1683,7 @@ export default function FlightPaymentPage() {
                 <strong>
                   {getPrice()}
                 </strong>
+
               </div>
 
               <div className="payment-security">
@@ -1342,9 +1743,11 @@ export default function FlightPaymentPage() {
       </section>
 
       <footer className="payment-footer">
+
         <p>
           Papeg Tour & Travel • Papua Highlands • Indonesia
         </p>
+
       </footer>
 
     </main>
