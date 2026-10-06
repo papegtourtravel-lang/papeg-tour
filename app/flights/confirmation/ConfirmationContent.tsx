@@ -386,19 +386,19 @@ export default function ConfirmationContent() {
     (document) => document.type === "electronic_ticket"
   );
 
-  const paymentAmount =
+    const paymentAmount =
     payment?.amount !== undefined
       ? payment.amount
-      : order?.total_amount;
+      : null;
 
   const paymentCurrency =
-    payment?.currency ||
-    order?.total_currency ||
-    "EUR";
+    payment?.amount !== undefined
+      ? "IDR"
+      : null;
 
   function handlePrint() {
-  window.print();
-}
+    window.print();
+  }
 
 async function handleSavePdf() {
   const ticket = document.querySelector(
