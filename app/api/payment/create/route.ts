@@ -1,3 +1,4 @@
+
 import { NextResponse } from "next/server";
 
 export async function POST(req: Request) {
@@ -77,8 +78,7 @@ export async function POST(req: Request) {
     if (!eurIdrRate || eurIdrRate <= 0) {
       return NextResponse.json(
         {
-          error:
-            "PAPEG_EUR_IDR_RATE belum diset di .env.local",
+          error: "PAPEG_EUR_IDR_RATE belum diset di .env.local",
         },
         { status: 500 }
       );
@@ -125,7 +125,8 @@ export async function POST(req: Request) {
           },
 
           callbacks: {
-            finish: "http://localhost:3000/flights/payment",
+            finish:
+              `${process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"}/flights/payment`,
           },
         }),
       }
