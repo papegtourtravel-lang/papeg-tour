@@ -1,3 +1,5 @@
+import { generateFlightTicketPdf } from "@/lib/generateFlightTicketPdf";
+
 type Passenger = {
   given_name?: string;
   family_name?: string;
@@ -89,6 +91,10 @@ export async function sendTicketEmail(
 
   const passengers = data.passengers || [];
 
+  // ==============================
+  // PASSENGER HTML
+  // ==============================
+
   const passengerHtml =
     passengers.length > 0
       ? passengers
@@ -131,6 +137,10 @@ export async function sendTicketEmail(
             Passenger information unavailable.
           </p>
         `;
+
+  // ==============================
+  // TICKET INFORMATION
+  // ==============================
 
   const documents = data.documents || [];
 
@@ -185,6 +195,10 @@ export async function sendTicketEmail(
             is being processed.
           </div>
         `;
+
+  // ==============================
+  // EMAIL HTML
+  // ==============================
 
   const html = `
     <div style="
@@ -480,6 +494,97 @@ export async function sendTicketEmail(
     </div>
   `;
 
+  // ==============================
+  // GENERATE PDF
+  // ==============================
+
+  let pdfBuffer: Buffer | null = null;
+
+  try {
+    pdfBuffer =
+      await generateFlightTicketPdf({
+        bookingReference:
+          data.bookingReference,
+        orderId: data.orderId,
+        passengers,
+        documents,
+        totalAmount:
+          data.totalAmount,
+        totalCurrency:
+          data.totalCurrency,
+      });
+
+    console.log(
+      "Flight ticket PDF berhasil dibuat."
+    );
+  } catch (pdfError) {
+    console.error(
+      "Gagal membuat flight ticket PDF:",
+      pdfError
+    );
+
+    // Jangan menggagalkan email hanya karena PDF gagal dibuat.
+    pdfBuffer = null;
+  }
+
+  // ==============================
+  // PDF FILE NAME
+  // ==============================
+
+  const safeReference =
+    (data.bookingReference || "Booking")
+      .replace(
+        /[^a-zA-Z0-9-_]/g,
+        ""
+      )
+      .trim();
+
+  const pdfFileName =
+    `Papeg_Flight_Ticket_${
+      safeReference || "Booking"
+    }.pdf`;
+
+  // ==============================
+  // RESEND PAYLOAD
+  // ==============================
+
+  const resendPayload: {
+    from: string;
+    to: string[];
+    reply_to?: string;
+    subject: string;
+    html: string;
+    attachments?: Array<{
+      filename: string;
+      content: string;
+    }>;
+  } = {
+    from,
+    to: [data.to],
+    reply_to: replyTo || undefined,
+    subject:
+      "Papeg Tour & Travel — Electronic Ticket",
+    html,
+  };
+
+  // ==============================
+  // ADD PDF ATTACHMENT
+  // ==============================
+
+  if (pdfBuffer) {
+    resendPayload.attachments = [
+      {
+        filename: pdfFileName,
+        content:
+          pdfBuffer.toString("base64"),
+      },
+    ];
+  }
+
+  // ==============================
+  // SEND EMAIL
+  // ==============================
+
   const response = await fetch(
     "https://api.resend.com/emails",
     {
@@ -488,14 +593,9 @@ export async function sendTicketEmail(
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        from,
-        to: [data.to],
-        reply_to: replyTo || undefined,
-        subject:
-          "Papeg Tour & Travel — Electronic Ticket",
-        html,
-      }),
+      body: JSON.stringify(
+        resendPayload
+      ),
     }
   );
 

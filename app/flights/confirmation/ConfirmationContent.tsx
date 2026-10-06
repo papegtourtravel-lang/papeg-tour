@@ -1,8 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import Image from "next/image";
 import { useSearchParams } from "next/navigation";
+import jsPDF from "jspdf";
+import html2canvas from "html2canvas";
 
 type Passenger = {
   id?: string;
@@ -21,29 +24,142 @@ type TicketDocument = {
   type?: string;
 };
 
+type Airport = {
+  iata_code?: string;
+  city_name?: string;
+  name?: string;
+  time_zone?: string;
+};
+
+type Carrier = {
+  iata_code?: string;
+  name?: string;
+  logo_symbol_url?: string;
+  logo_lockup_url?: string | null;
+};
+
+type SegmentPassenger = {
+  passenger_id?: string;
+  cabin_class?: string;
+  cabin_class_marketing_name?: string;
+  seat?: string | null;
+  baggages?: {
+    quantity?: number;
+    type?: string;
+  }[];
+};
+
+type Segment = {
+  id?: string;
+  departing_at?: string;
+  arriving_at?: string;
+  duration?: string;
+  marketing_carrier_flight_number?: string;
+  operating_carrier_flight_number?: string;
+  origin_terminal?: string;
+  destination_terminal?: string;
+  aircraft?: {
+    name?: string;
+    iata_code?: string;
+  };
+  origin?: Airport;
+  destination?: Airport;
+  marketing_carrier?: Carrier;
+  operating_carrier?: Carrier;
+  passengers?: SegmentPassenger[];
+  stops?: unknown[];
+};
+
+type Slice = {
+  id?: string;
+  duration?: string;
+  origin?: Airport;
+  destination?: Airport;
+  segments?: Segment[];
+  fare_brand_name?: string;
+};
+
+type BookingReference = {
+  booking_reference?: string;
+  carrier?: Carrier;
+};
+
+type PaymentStatus = {
+  paid_at?: string | null;
+  awaiting_payment?: boolean;
+};
+
 type BookingOrder = {
   id?: string;
   booking_reference?: string;
+  booking_references?: BookingReference[];
   type?: string;
   status?: string;
   created_at?: string;
   total_amount?: string | number | null;
   total_currency?: string | null;
+  base_amount?: string | number | null;
+  base_currency?: string | null;
+  tax_amount?: string | number | null;
+  tax_currency?: string | null;
   passengers?: Passenger[];
   documents?: TicketDocument[];
+  slices?: Slice[];
+  payment_status?: PaymentStatus;
+};
+
+type PaymentInfo = {
+  orderId?: string;
+  midtransOrderId?: string;
+  amount?: number | string;
+  currency?: string;
+  status?: string;
 };
 
 function formatDate(value?: string | null) {
   if (!value) return "-";
 
-  try {
-    return new Date(value).toLocaleString("en-US", {
-      dateStyle: "medium",
-      timeStyle: "short",
-    });
-  } catch {
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
     return value;
   }
+
+  return date.toLocaleDateString("en-GB", {
+    day: "2-digit",
+    month: "long",
+    year: "numeric",
+  });
+}
+
+function formatFlightDate(value?: string | null) {
+  if (!value) return "-";
+
+  const datePart = value.split("T")[0];
+
+  if (!datePart) return "-";
+
+  const [year, month, day] = datePart.split("-").map(Number);
+
+  if (!year || !month || !day) return value;
+
+  const date = new Date(year, month - 1, day);
+
+  return date.toLocaleDateString("en-GB", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
+}
+
+function formatFlightTime(value?: string | null) {
+  if (!value) return "-";
+
+  const timePart = value.split("T")[1];
+
+  if (!timePart) return "-";
+
+  return timePart.slice(0, 5);
 }
 
 function formatMoney(
@@ -63,123 +179,334 @@ function formatMoney(
   try {
     return new Intl.NumberFormat("en-US", {
       style: "currency",
-      currency: currency || "USD",
+      currency: currency || "EUR",
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
     }).format(numericAmount);
   } catch {
-    return `${numericAmount.toFixed(2)} ${currency || "USD"}`;
+    return `${numericAmount.toFixed(2)} ${currency || ""}`.trim();
   }
 }
 
-function getPassengerName(passenger: Passenger) {
+function getPassengerName(passenger?: Passenger) {
+  if (!passenger) return "-";
+
+  const fullName = [
+    passenger.given_name,
+    passenger.family_name,
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  return fullName || "-";
+}
+
+function formatDuration(duration?: string | null) {
+  if (!duration) return "-";
+
+  const hours = duration.match(/(\d+)H/)?.[1];
+  const minutes = duration.match(/(\d+)M/)?.[1];
+
+  const parts: string[] = [];
+
+  if (hours) {
+    parts.push(`${hours}h`);
+  }
+
+  if (minutes) {
+    parts.push(`${minutes}m`);
+  }
+
+  return parts.length > 0 ? parts.join(" ") : duration;
+}
+
+function getBaggageText(segment?: Segment) {
+  if (!segment?.passengers?.length) return "-";
+
+  const baggage = segment.passengers[0]?.baggages || [];
+
+  if (!baggage.length) return "Not specified";
+
+  return baggage
+    .map((item) => {
+      const quantity = item.quantity ?? 0;
+
+      if (item.type === "checked") {
+        return `${quantity} checked`;
+      }
+
+      if (item.type === "carry_on") {
+        return `${quantity} carry-on`;
+      }
+
+      return `${quantity} ${item.type || "bag"}`;
+    })
+    .join(" • ");
+}
+
+function getCabinClass(segment?: Segment) {
+  if (!segment?.passengers?.length) return "-";
+
   return (
-    `${passenger.given_name || ""} ${
-      passenger.family_name || ""
-    }`.trim() || "Passenger"
+    segment.passengers[0]?.cabin_class_marketing_name ||
+    segment.passengers[0]?.cabin_class ||
+    "-"
   );
+}
+
+function getFlightNumber(segment?: Segment) {
+  if (!segment) return "-";
+
+  const carrierCode =
+    segment.marketing_carrier?.iata_code ||
+    segment.operating_carrier?.iata_code ||
+    "";
+
+  const flightNumber =
+    segment.marketing_carrier_flight_number ||
+    segment.operating_carrier_flight_number ||
+    "";
+
+  return `${carrierCode} ${flightNumber}`.trim() || "-";
 }
 
 export default function ConfirmationContent() {
   const searchParams = useSearchParams();
+
   const orderId = searchParams.get("orderId");
 
   const [order, setOrder] = useState<BookingOrder | null>(null);
+  const [payment, setPayment] = useState<PaymentInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [paymentAmount, setPaymentAmount] = useState<number | null>(null);
-  const [paymentCurrency, setPaymentCurrency] = useState("IDR");
 
   useEffect(() => {
-    if (!orderId) {
-      setError("Booking Order ID is missing.");
-      setLoading(false);
-      return;
-    }
-
-    const bookingId = orderId;
-
-    try {
-      const savedPayment = sessionStorage.getItem("midtransPayment");
-
-      if (savedPayment) {
-        const payment = JSON.parse(savedPayment);
-
-        if (
-          payment.orderId === bookingId ||
-          payment.midtransOrderId === `PAPEG-${bookingId}`
-        ) {
-          const amount = Number(payment.amount);
-
-          if (!Number.isNaN(amount) && amount > 0) {
-            setPaymentAmount(amount);
-            setPaymentCurrency(payment.currency || "IDR");
-          }
-        }
+    async function loadBooking() {
+      if (!orderId) {
+        setError("Booking order ID is missing.");
+        setLoading(false);
+        return;
       }
-    } catch (error) {
-      console.error("Unable to read payment information:", error);
-    }
 
-    async function loadOrder() {
       try {
         setLoading(true);
         setError("");
 
+        if (typeof window !== "undefined") {
+          const storedPayment =
+            sessionStorage.getItem("midtransPayment");
+
+          if (storedPayment) {
+            try {
+              const parsedPayment = JSON.parse(
+                storedPayment
+              ) as PaymentInfo;
+
+              const matchesOrder =
+                parsedPayment.orderId === orderId ||
+                parsedPayment.midtransOrderId ===
+                  `PAPEG-${orderId}`;
+
+              if (matchesOrder) {
+                setPayment(parsedPayment);
+              }
+            } catch (paymentError) {
+              console.warn(
+                "Could not read Midtrans payment information:",
+                paymentError
+              );
+            }
+          }
+        }
+
         const response = await fetch(
-          `/api/flights/order/${encodeURIComponent(bookingId)}`,
+          `/api/flights/order/${encodeURIComponent(orderId)}`,
           {
+            method: "GET",
             cache: "no-store",
           }
         );
 
         const data = await response.json();
 
-        if (!response.ok || !data.success) {
+        if (!response.ok || !data?.success) {
           throw new Error(
-            data.error || "Unable to load booking information."
+            data?.error || "Failed to retrieve booking information."
           );
         }
 
         setOrder(data.order);
-      } catch (err) {
-        console.error("Load booking error:", err);
+      } catch (bookingError) {
+        console.error("Confirmation error:", bookingError);
 
         setError(
-          err instanceof Error
-            ? err.message
-            : "Unable to load booking information."
+          bookingError instanceof Error
+            ? bookingError.message
+            : "Failed to load booking confirmation."
         );
       } finally {
         setLoading(false);
       }
     }
 
-    loadOrder();
+    loadBooking();
   }, [orderId]);
 
+  const segments = useMemo(() => {
+    if (!order?.slices) return [];
+
+    return order.slices.flatMap(
+      (slice) => slice.segments || []
+    );
+  }, [order]);
+
+  const firstSegment = segments[0];
+  const lastSegment = segments[segments.length - 1];
+
+  const origin = firstSegment?.origin;
+  const destination = lastSegment?.destination;
+
+  const airline =
+    firstSegment?.marketing_carrier ||
+    firstSegment?.operating_carrier;
+
+  const flightNumber = getFlightNumber(firstSegment);
+
+  const bookingReference =
+    order?.booking_reference ||
+    order?.booking_references?.[0]?.booking_reference ||
+    order?.id ||
+    "-";
+
+  const bookingStatus = order?.status || "confirmed";
+
+  const documents = order?.documents || [];
+
+  const electronicTickets = documents.filter(
+    (document) => document.type === "electronic_ticket"
+  );
+
+  const paymentAmount =
+    payment?.amount !== undefined
+      ? payment.amount
+      : order?.total_amount;
+
+  const paymentCurrency =
+    payment?.currency ||
+    order?.total_currency ||
+    "EUR";
+
+  function handlePrint() {
+  window.print();
+}
+
+async function handleSavePdf() {
+  const ticket = document.querySelector(
+    ".flight-ticket-print"
+  ) as HTMLElement | null;
+
+  if (!ticket) {
+    alert("Flight ticket could not be found.");
+    return;
+  }
+
+  try {
+    const originalStyle = {
+      display: ticket.style.display,
+      position: ticket.style.position,
+      left: ticket.style.left,
+      top: ticket.style.top,
+      width: ticket.style.width,
+      background: ticket.style.background,
+    };
+
+    ticket.style.display = "block";
+    ticket.style.position = "fixed";
+    ticket.style.left = "-10000px";
+    ticket.style.top = "0";
+    ticket.style.width = "190mm";
+    ticket.style.background = "#ffffff";
+
+    const canvas = await html2canvas(ticket, {
+      scale: 2,
+      useCORS: true,
+      backgroundColor: "#ffffff",
+      logging: false,
+    });
+
+    ticket.style.display = originalStyle.display;
+    ticket.style.position = originalStyle.position;
+    ticket.style.left = originalStyle.left;
+    ticket.style.top = originalStyle.top;
+    ticket.style.width = originalStyle.width;
+    ticket.style.background = originalStyle.background;
+
+    const imageData = canvas.toDataURL("image/png");
+
+    const pdf = new jsPDF({
+      orientation: "portrait",
+      unit: "mm",
+      format: "a4",
+    });
+
+    const pageWidth = 210;
+    const pageHeight = 297;
+    const margin = 10;
+
+    const availableWidth = pageWidth - margin * 2;
+    const imageWidth = availableWidth;
+
+    const imageHeight =
+      (canvas.height * imageWidth) / canvas.width;
+
+    const availableHeight =
+      pageHeight - margin * 2;
+
+    const finalHeight = Math.min(
+      imageHeight,
+      availableHeight
+    );
+
+    pdf.addImage(
+      imageData,
+      "PNG",
+      margin,
+      margin,
+      imageWidth,
+      finalHeight
+    );
+
+    const safeReference = bookingReference
+      .replace(/[^a-zA-Z0-9-_]/g, "")
+      .trim();
+
+    const fileName = `Papeg_Flight_Ticket_${
+      safeReference || "Booking"
+    }.pdf`;
+
+    pdf.save(fileName);
+  } catch (pdfError) {
+    console.error("PDF generation error:", pdfError);
+
+    alert(
+      "Unable to create the PDF. Please try again."
+    );
+  }
+}
   if (loading) {
     return (
-      <main className="min-h-screen bg-[#f6f3ec] px-4 py-12 sm:px-6 sm:py-16">
+      <main className="min-h-screen bg-[#f6f3ec] px-6 py-16">
         <div className="mx-auto max-w-4xl">
-          <div className="overflow-hidden rounded-[2rem] bg-white shadow-xl">
-            <div className="h-2 bg-[#1d5c48]" />
+          <div className="rounded-3xl bg-white p-10 text-center shadow-sm">
+            <div className="mx-auto mb-5 h-12 w-12 animate-spin rounded-full border-4 border-[#1d5c48] border-t-transparent" />
 
-            <div className="px-6 py-14 text-center sm:px-10">
-              <div className="mx-auto mb-6 flex h-16 w-16 items-center justify-center rounded-full bg-[#e7f0ec]">
-                <div className="h-8 w-8 animate-spin rounded-full border-4 border-[#1d5c48] border-t-transparent" />
-              </div>
+            <h1 className="text-2xl font-bold text-[#26332e]">
+              Loading Booking Confirmation
+            </h1>
 
-              <p className="text-sm font-semibold uppercase tracking-[0.18em] text-[#1d5c48]">
-                Papeg Tour & Travel
-              </p>
-
-              <h1 className="mt-3 text-2xl font-bold text-[#26332e] sm:text-3xl">
-                Loading Booking Confirmation
-              </h1>
-
-              <p className="mx-auto mt-3 max-w-lg text-sm leading-6 text-gray-500">
-                Please wait while we retrieve your booking information.
-              </p>
-            </div>
+            <p className="mt-2 text-gray-600">
+              Please wait while we retrieve your booking information.
+            </p>
           </div>
         </div>
       </main>
@@ -188,56 +515,35 @@ export default function ConfirmationContent() {
 
   if (error || !order) {
     return (
-      <main className="min-h-screen bg-[#f6f3ec] px-4 py-12 sm:px-6 sm:py-16">
+      <main className="min-h-screen bg-[#f6f3ec] px-6 py-16">
         <div className="mx-auto max-w-3xl">
-          <div className="overflow-hidden rounded-[2rem] bg-white shadow-xl">
-            <div className="h-2 bg-red-500" />
+          <div className="rounded-3xl bg-white p-10 text-center shadow-sm">
+            <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-red-100 text-2xl">
+              !
+            </div>
 
-            <div className="px-6 py-12 text-center sm:px-10 sm:py-14">
-              <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-full bg-red-100 text-3xl font-bold text-red-600">
-                !
-              </div>
+            <h1 className="mt-5 text-2xl font-bold text-[#26332e]">
+              Booking Confirmation Error
+            </h1>
 
-              <p className="mt-6 text-sm font-semibold uppercase tracking-[0.18em] text-red-600">
-                Papeg Tour & Travel
-              </p>
+            <p className="mt-3 text-gray-600">
+              {error || "Booking information could not be found."}
+            </p>
 
-              <h1 className="mt-3 text-2xl font-bold text-[#26332e] sm:text-3xl">
-                Booking Confirmation Not Found
-              </h1>
+            <div className="mt-8 flex flex-wrap justify-center gap-3">
+              <Link
+                href="/flight"
+                className="rounded-full bg-[#1d5c48] px-6 py-3 font-semibold text-white transition hover:opacity-90"
+              >
+                Book Another Flight
+              </Link>
 
-              <p className="mx-auto mt-4 max-w-xl text-sm leading-6 text-gray-600">
-                {error ||
-                  "We could not find the booking information for this order."}
-              </p>
-
-              {orderId && (
-                <div className="mx-auto mt-6 max-w-xl rounded-2xl bg-gray-50 p-4 text-left">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">
-                    Order ID
-                  </p>
-
-                  <p className="mt-1 break-all text-sm font-semibold text-[#26332e]">
-                    {orderId}
-                  </p>
-                </div>
-              )}
-
-              <div className="mt-8 flex flex-col justify-center gap-3 sm:flex-row">
-                <Link
-                  href="/flight"
-                  className="rounded-xl bg-[#1d5c48] px-6 py-3 text-center text-sm font-bold text-white shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"
-                >
-                  Back to Flight Search
-                </Link>
-
-                <Link
-                  href="/"
-                  className="rounded-xl border border-gray-300 bg-white px-6 py-3 text-center text-sm font-bold text-[#26332e] transition hover:bg-gray-50"
-                >
-                  Back to Home
-                </Link>
-              </div>
+              <Link
+                href="/"
+                className="rounded-full border border-gray-300 px-6 py-3 font-semibold text-[#26332e] transition hover:bg-gray-50"
+              >
+                Back to Home
+              </Link>
             </div>
           </div>
         </div>
@@ -245,1030 +551,1030 @@ export default function ConfirmationContent() {
     );
   }
 
-  const passengers = order.passengers || [];
-  const documents = order.documents || [];
-
-  const electronicTickets = documents.filter(
-    (document) => document.type === "electronic_ticket"
-  );
-
-  const bookingReference = order.booking_reference || order.id || "-";
-  const bookingStatus = order.status || "confirmed";
-
   return (
-    <main className="min-h-screen bg-[#f6f3ec] px-4 py-8 sm:px-6 sm:py-12">
-      <div className="mx-auto max-w-5xl">
-
-        {/* =====================================================
-            PRINT-ONLY FLIGHT TICKET
-        ====================================================== */}
-
-        <section className="flight-ticket-print">
-          <div className="ticket-header">
-            <div className="ticket-brand-area">
-              <div className="ticket-logo">PAPEG</div>
-
-              <div>
-                <p className="ticket-brand">
-                  PAPEG TOUR & TRAVEL
-                </p>
-
-                <p className="ticket-label">
-                  ELECTRONIC TICKET
-                </p>
-              </div>
-            </div>
-
-            <div className="ticket-status">
-              ISSUED
-            </div>
-          </div>
-
-          <div className="ticket-reference">
+    <>
+      {/* PRINT VERSION */}
+      <div className="flight-ticket-print">
+        <div className="print-ticket">
+          <div className="print-ticket-header">
             <div>
+              <div className="print-logo-wrapper">
+  <img
+    src="/images/papeg-logo.png"
+    alt="Papeg Tour & Travel"
+    className="print-logo"
+  />
+</div>
+
+              <p className="print-small">
+                Flight Booking Confirmation
+              </p>
+            </div>
+
+            <div className="print-reference">
               <span>BOOKING REFERENCE</span>
               <strong>{bookingReference}</strong>
             </div>
+          </div>
+
+          <div className="print-route">
+            <div className="print-airport">
+              <strong>{origin?.iata_code || "-"}</strong>
+              <span>{origin?.city_name || "-"}</span>
+
+              <small>
+                {formatFlightDate(firstSegment?.departing_at)}
+              </small>
+
+              <small>
+                {formatFlightTime(firstSegment?.departing_at)}
+              </small>
+            </div>
+
+            <div className="print-arrow">
+              ✈
+            </div>
+
+            <div className="print-airport">
+              <strong>{destination?.iata_code || "-"}</strong>
+              <span>{destination?.city_name || "-"}</span>
+
+              <small>
+                {formatFlightDate(lastSegment?.arriving_at)}
+              </small>
+
+              <small>
+                {formatFlightTime(lastSegment?.arriving_at)}
+              </small>
+            </div>
+          </div>
+
+          <div className="print-divider" />
+
+          <div className="print-grid">
+            <div>
+              <span>Airline</span>
+              <strong>{airline?.name || "-"}</strong>
+            </div>
 
             <div>
-              <span>TICKET IDENTIFIER</span>
-
-              <strong>
-                {electronicTickets[0]?.unique_identifier || "-"}
-              </strong>
-            </div>
-          </div>
-
-          <div className="ticket-section">
-            <p className="ticket-section-title">
-              PASSENGER
-            </p>
-
-            {passengers.length === 0 ? (
-              <p className="ticket-empty">
-                No passenger information available.
-              </p>
-            ) : (
-              passengers.map((passenger, index) => (
-                <div
-                  key={passenger.id || index}
-                  className="ticket-passenger"
-                >
-                  <div>
-                    <span>FULL NAME</span>
-
-                    <strong>
-                      {getPassengerName(passenger)}
-                    </strong>
-                  </div>
-
-                  <div>
-                    <span>TYPE</span>
-
-                    <strong>
-                      {passenger.type || "Passenger"}
-                    </strong>
-                  </div>
-
-                  <div>
-                    <span>GENDER</span>
-
-                    <strong>
-                      {passenger.gender || "-"}
-                    </strong>
-                  </div>
-
-                  <div>
-                    <span>DATE OF BIRTH</span>
-
-                    <strong>
-                      {passenger.born_on || "-"}
-                    </strong>
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-
-          <div className="ticket-section">
-            <p className="ticket-section-title">
-              FLIGHT INFORMATION
-            </p>
-
-            <div className="ticket-flight">
-              <div className="ticket-airport">
-                <span>FROM</span>
-
-                <strong>DJJ</strong>
-
-                <small>Jayapura</small>
-              </div>
-
-              <div className="ticket-arrow">
-                →
-              </div>
-
-              <div className="ticket-airport ticket-airport-right">
-                <span>TO</span>
-
-                <strong>WMX</strong>
-
-                <small>Wamena</small>
-              </div>
+              <span>Flight</span>
+              <strong>{flightNumber}</strong>
             </div>
 
-            <div className="ticket-flight-details">
-              <div>
-                <span>TRAVEL DATE</span>
-
-                <strong>
-                  14 October 2026
-                </strong>
-              </div>
-
-              <div>
-                <span>BOOKING STATUS</span>
-
-                <strong>
-                  {bookingStatus}
-                </strong>
-              </div>
-
-              <div>
-                <span>BOOKING CREATED</span>
-
-                <strong>
-                  {formatDate(order.created_at)}
-                </strong>
-              </div>
-            </div>
-          </div>
-
-          <div className="ticket-total">
             <div>
-              <span>TOTAL PAID</span>
+              <span>Cabin</span>
+              <strong>{getCabinClass(firstSegment)}</strong>
+            </div>
 
+            <div>
+              <span>Aircraft</span>
               <strong>
-                {paymentAmount !== null
-                  ? formatMoney(
-                      paymentAmount,
-                      paymentCurrency
-                    )
-                  : formatMoney(
-                      order.total_amount,
-                      order.total_currency
-                    )}
+                {firstSegment?.aircraft?.name || "-"}
               </strong>
             </div>
 
-            <div className="ticket-currency">
-              {paymentAmount !== null
-                ? paymentCurrency
-                : order.total_currency || "EUR"}
+            <div>
+              <span>Duration</span>
+              <strong>
+                {formatDuration(firstSegment?.duration)}
+              </strong>
+            </div>
+
+            <div>
+              <span>Baggage</span>
+              <strong>{getBaggageText(firstSegment)}</strong>
             </div>
           </div>
 
-          <div className="ticket-note">
-            <strong>
-              Important Information
-            </strong>
+          <div className="print-divider" />
 
-            <p>
-              Please check that the passenger name and
-              booking information are correct. Keep this
-              electronic ticket for your travel records.
-            </p>
-          </div>
+          <h3 className="print-section-title">
+            Passenger
+          </h3>
 
-          <div className="ticket-footer">
-            <span>
-              Papeg Tour & Travel
-            </span>
+          {order.passengers?.map((passenger) => (
+            <div
+              key={passenger.id || getPassengerName(passenger)}
+              className="print-passenger"
+            >
+              <strong>
+                {getPassengerName(passenger)}
+              </strong>
 
-            <span>
-              Discover the Heart of Papua
-            </span>
-          </div>
-        </section>
-
-        {/* =====================================================
-            SUCCESS HEADER
-        ====================================================== */}
-
-        <section className="screen-only mb-6 overflow-hidden rounded-[2rem] bg-[#1d5c48] shadow-xl">
-          <div className="relative px-6 py-10 text-center sm:px-10 sm:py-14">
-            <div className="mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-full bg-white text-4xl font-bold text-[#1d5c48] shadow-lg">
-              ✓
-            </div>
-
-            <p className="text-xs font-bold uppercase tracking-[0.25em] text-white/75 sm:text-sm">
-              Papeg Tour & Travel
-            </p>
-
-            <h1 className="mt-3 text-3xl font-bold tracking-tight text-white sm:text-5xl">
-              Booking Confirmed
-            </h1>
-
-            <p className="mx-auto mt-4 max-w-2xl text-sm leading-6 text-white/85 sm:text-base">
-              Your flight booking has been successfully
-              created. Please keep your booking reference
-              for future communication and travel records.
-            </p>
-
-            <div className="mt-8 flex justify-center">
-              <div className="rounded-full bg-white/10 px-5 py-2 text-xs font-semibold text-white ring-1 ring-white/20">
-                ✓ Reservation Successfully Created
-              </div>
-            </div>
-          </div>
-        </section>
-
-        {/* =====================================================
-            BOOKING SUMMARY
-        ====================================================== */}
-
-        <section className="screen-only mb-6 overflow-hidden rounded-[2rem] bg-white shadow-lg">
-          <div className="border-b border-gray-100 px-6 py-5 sm:px-8">
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#1d5c48]">
-                  Reservation
-                </p>
-
-                <h2 className="mt-1 text-2xl font-bold text-[#26332e]">
-                  Booking Summary
-                </h2>
-              </div>
-
-              <span className="inline-flex w-fit items-center rounded-full bg-green-100 px-4 py-2 text-xs font-bold capitalize text-green-700">
-                ✓ {bookingStatus}
+              <span>
+                {passenger.type || "Passenger"}
               </span>
             </div>
+          ))}
+
+          {electronicTickets.length > 0 && (
+            <>
+              <div className="print-divider" />
+
+              <h3 className="print-section-title">
+                Electronic Ticket
+              </h3>
+
+              {electronicTickets.map((ticket, index) => (
+                <div
+                  key={`${ticket.unique_identifier}-${index}`}
+                  className="print-ticket-number"
+                >
+                  <span>Ticket Number</span>
+                  <strong>
+                    {ticket.unique_identifier || "-"}
+                  </strong>
+                </div>
+              ))}
+            </>
+          )}
+
+          <div className="print-footer">
+            <p>
+              Issued by Papeg Tour & Travel
+            </p>
+
+            <p>
+              Please present this confirmation when required.
+            </p>
           </div>
+        </div>
+      </div>
 
-          <div className="grid gap-px bg-gray-100 sm:grid-cols-2">
-            <div className="bg-white p-6 sm:p-7">
-              <p className="text-xs font-bold uppercase tracking-[0.15em] text-gray-400">
-                Booking Reference
-              </p>
+      {/* SCREEN VERSION */}
+      <main className="screen-only min-h-screen bg-[#f6f3ec] px-4 py-10 sm:px-6 lg:px-8">
+        <div className="mx-auto max-w-5xl">
 
-              <p className="mt-2 break-all text-3xl font-black tracking-[0.12em] text-[#1d5c48]">
-                {bookingReference}
-              </p>
-
-              <p className="mt-2 text-xs text-gray-500">
-                Keep this reference for your booking.
-              </p>
-            </div>
-
-            <div className="bg-white p-6 sm:p-7">
-              <p className="text-xs font-bold uppercase tracking-[0.15em] text-gray-400">
-                Order ID
-              </p>
-
-              <p className="mt-3 break-all text-sm font-bold leading-6 text-[#26332e]">
-                {order.id || "-"}
-              </p>
-
-              <p className="mt-2 text-xs text-gray-500">
-                Papeg booking order identifier.
-              </p>
-            </div>
-
-            <div className="bg-white p-6 sm:p-7">
-              <p className="text-xs font-bold uppercase tracking-[0.15em] text-gray-400">
-                Booking Status
-              </p>
-
-              <div className="mt-3">
-                <span className="inline-flex items-center gap-2 rounded-full bg-green-50 px-4 py-2 text-sm font-bold capitalize text-green-700 ring-1 ring-green-200">
-                  <span className="h-2 w-2 rounded-full bg-green-500" />
-                  {bookingStatus}
-                </span>
-              </div>
-            </div>
-
-            <div className="bg-white p-6 sm:p-7">
-              <p className="text-xs font-bold uppercase tracking-[0.15em] text-gray-400">
-                Booking Created
-              </p>
-
-              <p className="mt-3 font-semibold text-[#26332e]">
-                {formatDate(order.created_at)}
-              </p>
-            </div>
-          </div>
-        </section>
-
-        {/* =====================================================
-            ELECTRONIC TICKET
-        ====================================================== */}
-
-        <section className="screen-only mb-6 overflow-hidden rounded-[2rem] bg-white shadow-lg">
-          <div className="border-b border-gray-100 px-6 py-6 sm:px-8">
-            <div className="flex items-start gap-4">
-              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-[#e7f0ec] text-2xl">
-                🎫
-              </div>
-
+          {/* Success Header */}
+          <div className="mb-6 rounded-3xl bg-[#1d5c48] p-8 text-white shadow-sm">
+            <div className="flex flex-col gap-6 sm:flex-row sm:items-center sm:justify-between">
               <div>
-                <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#1d5c48]">
-                  Travel Document
+                <div className="mb-3 inline-flex h-12 w-12 items-center justify-center rounded-full bg-white/15 text-2xl">
+                  ✓
+                </div>
+
+                <h1 className="text-3xl font-bold sm:text-4xl">
+                  Booking Confirmed
+                </h1>
+
+                <p className="mt-2 text-white/80">
+                  Your flight booking has been successfully retrieved.
+                </p>
+              </div>
+
+              <div className="rounded-2xl bg-white/10 px-6 py-4">
+                <p className="text-xs uppercase tracking-wider text-white/70">
+                  Booking Reference
                 </p>
 
-                <h2 className="mt-1 text-2xl font-bold text-[#26332e]">
+                <p className="mt-1 text-2xl font-bold tracking-wider">
+                  {bookingReference}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Flight Card */}
+          <div className="overflow-hidden rounded-3xl bg-white shadow-sm">
+            <div className="border-b border-gray-100 px-6 py-6 sm:px-8">
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-sm font-semibold uppercase tracking-wider text-[#1d5c48]">
+                    Flight Itinerary
+                  </p>
+
+                  <h2 className="mt-1 text-2xl font-bold text-[#26332e]">
+                    {origin?.city_name || "-"} →{" "}
+                    {destination?.city_name || "-"}
+                  </h2>
+                </div>
+
+                <div className="text-left sm:text-right">
+                  <p className="text-sm text-gray-500">
+                    {airline?.name || "-"}
+                  </p>
+
+                  <p className="font-semibold text-[#26332e]">
+                    {flightNumber}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="px-6 py-8 sm:px-8">
+
+              {/* Route */}
+              <div className="grid gap-8 md:grid-cols-[1fr_auto_1fr] md:items-center">
+                <div>
+                  <p className="text-4xl font-bold text-[#26332e]">
+                    {origin?.iata_code || "-"}
+                  </p>
+
+                  <p className="mt-1 font-semibold text-gray-700">
+                    {origin?.city_name || "-"}
+                  </p>
+
+                  <p className="mt-1 text-sm text-gray-500">
+                    {origin?.name || "-"}
+                  </p>
+
+                  <div className="mt-4">
+                    <p className="text-2xl font-bold text-[#26332e]">
+                      {formatFlightTime(
+                        firstSegment?.departing_at
+                      )}
+                    </p>
+
+                    <p className="text-sm text-gray-500">
+                      {formatFlightDate(
+                        firstSegment?.departing_at
+                      )}
+                    </p>
+
+                    {firstSegment?.origin_terminal && (
+                      <p className="mt-1 text-xs text-gray-500">
+                        Terminal {firstSegment.origin_terminal}
+                      </p>
+                    )}
+                  </div>
+                </div>
+
+                <div className="hidden text-center md:block">
+                  <div className="text-2xl text-[#1d5c48]">
+                    ✈
+                  </div>
+
+                  <div className="my-2 h-px w-28 bg-gray-200" />
+
+                  <p className="text-xs font-medium text-gray-500">
+                    {formatDuration(
+                      firstSegment?.duration
+                    )}
+                  </p>
+
+                  {firstSegment?.stops &&
+                    firstSegment.stops.length === 0 && (
+                      <p className="mt-1 text-xs text-[#1d5c48]">
+                        Non-stop
+                      </p>
+                    )}
+                </div>
+
+                <div className="md:text-right">
+                  <p className="text-4xl font-bold text-[#26332e]">
+                    {destination?.iata_code || "-"}
+                  </p>
+
+                  <p className="mt-1 font-semibold text-gray-700">
+                    {destination?.city_name || "-"}
+                  </p>
+
+                  <p className="mt-1 text-sm text-gray-500">
+                    {destination?.name || "-"}
+                  </p>
+
+                  <div className="mt-4">
+                    <p className="text-2xl font-bold text-[#26332e]">
+                      {formatFlightTime(
+                        lastSegment?.arriving_at
+                      )}
+                    </p>
+
+                    <p className="text-sm text-gray-500">
+                      {formatFlightDate(
+                        lastSegment?.arriving_at
+                      )}
+                    </p>
+
+                    {lastSegment?.destination_terminal && (
+                      <p className="mt-1 text-xs text-gray-500">
+                        Terminal{" "}
+                        {lastSegment.destination_terminal}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Mobile flight line */}
+              <div className="mt-8 flex items-center justify-center gap-3 md:hidden">
+                <div className="h-px flex-1 bg-gray-200" />
+
+                <div className="text-center">
+                  <div className="text-xl text-[#1d5c48]">
+                    ✈
+                  </div>
+
+                  <p className="text-xs text-gray-500">
+                    {formatDuration(
+                      firstSegment?.duration
+                    )}
+                  </p>
+
+                  {firstSegment?.stops &&
+                    firstSegment.stops.length === 0 && (
+                      <p className="text-xs text-[#1d5c48]">
+                        Non-stop
+                      </p>
+                    )}
+                </div>
+
+                <div className="h-px flex-1 bg-gray-200" />
+              </div>
+
+              {/* Flight Details */}
+              <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+
+                <div className="rounded-2xl bg-[#f6f3ec] p-5">
+                  <p className="text-xs uppercase tracking-wider text-gray-500">
+                    Airline
+                  </p>
+
+                  <p className="mt-2 font-bold text-[#26332e]">
+                    {airline?.name || "-"}
+                  </p>
+                </div>
+
+                <div className="rounded-2xl bg-[#f6f3ec] p-5">
+                  <p className="text-xs uppercase tracking-wider text-gray-500">
+                    Flight
+                  </p>
+
+                  <p className="mt-2 font-bold text-[#26332e]">
+                    {flightNumber}
+                  </p>
+                </div>
+
+                <div className="rounded-2xl bg-[#f6f3ec] p-5">
+                  <p className="text-xs uppercase tracking-wider text-gray-500">
+                    Cabin
+                  </p>
+
+                  <p className="mt-2 font-bold capitalize text-[#26332e]">
+                    {getCabinClass(firstSegment)}
+                  </p>
+                </div>
+
+                <div className="rounded-2xl bg-[#f6f3ec] p-5">
+                  <p className="text-xs uppercase tracking-wider text-gray-500">
+                    Baggage
+                  </p>
+
+                  <p className="mt-2 font-bold text-[#26332e]">
+                    {getBaggageText(firstSegment)}
+                  </p>
+                </div>
+
+              </div>
+
+              {/* Aircraft */}
+              <div className="mt-4 grid gap-4 sm:grid-cols-3">
+
+                <div className="rounded-2xl border border-gray-100 p-5">
+                  <p className="text-xs uppercase tracking-wider text-gray-500">
+                    Aircraft
+                  </p>
+
+                  <p className="mt-2 font-semibold text-[#26332e]">
+                    {firstSegment?.aircraft?.name || "-"}
+                  </p>
+                </div>
+
+                <div className="rounded-2xl border border-gray-100 p-5">
+                  <p className="text-xs uppercase tracking-wider text-gray-500">
+                    Duration
+                  </p>
+
+                  <p className="mt-2 font-semibold text-[#26332e]">
+                    {formatDuration(
+                      firstSegment?.duration
+                    )}
+                  </p>
+                </div>
+
+                <div className="rounded-2xl border border-gray-100 p-5">
+                  <p className="text-xs uppercase tracking-wider text-gray-500">
+                    Fare
+                  </p>
+
+                  <p className="mt-2 font-semibold text-[#26332e]">
+                    {order.slices?.[0]?.fare_brand_name ||
+                      "-"}
+                  </p>
+                </div>
+
+              </div>
+            </div>
+          </div>
+
+          {/* Booking Summary */}
+          <div className="mt-6 grid gap-6 lg:grid-cols-2">
+
+            <section className="rounded-3xl bg-white p-6 shadow-sm sm:p-8">
+              <h2 className="text-xl font-bold text-[#26332e]">
+                Booking Information
+              </h2>
+
+              <div className="mt-6 space-y-4">
+
+                <div className="flex items-center justify-between gap-4 border-b border-gray-100 pb-4">
+                  <span className="text-gray-500">
+                    Booking Reference
+                  </span>
+
+                  <span className="font-bold text-[#26332e]">
+                    {bookingReference}
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between gap-4 border-b border-gray-100 pb-4">
+                  <span className="text-gray-500">
+                    Booking ID
+                  </span>
+
+                  <span className="max-w-[220px] break-all text-right text-sm font-medium text-[#26332e]">
+                    {order.id || "-"}
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between gap-4 border-b border-gray-100 pb-4">
+                  <span className="text-gray-500">
+                    Booking Type
+                  </span>
+
+                  <span className="font-semibold capitalize text-[#26332e]">
+                    {order.type || "-"}
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between gap-4 border-b border-gray-100 pb-4">
+                  <span className="text-gray-500">
+                    Status
+                  </span>
+
+                  <span className="rounded-full bg-green-100 px-3 py-1 text-sm font-semibold capitalize text-green-700">
+                    {bookingStatus}
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between gap-4">
+                  <span className="text-gray-500">
+                    Created
+                  </span>
+
+                  <span className="font-semibold text-[#26332e]">
+                    {formatDate(order.created_at)}
+                  </span>
+                </div>
+
+              </div>
+            </section>
+
+            <section className="rounded-3xl bg-white p-6 shadow-sm sm:p-8">
+              <h2 className="text-xl font-bold text-[#26332e]">
+                Payment
+              </h2>
+
+              <div className="mt-6 rounded-2xl bg-[#f6f3ec] p-6">
+                <p className="text-sm text-gray-500">
+                  Total Paid
+                </p>
+
+                <p className="mt-2 text-3xl font-bold text-[#1d5c48]">
+                  {formatMoney(
+                    paymentAmount,
+                    paymentCurrency
+                  )}
+                </p>
+
+                {order.base_amount !== undefined && (
+                  <div className="mt-5 space-y-2 text-sm">
+                    <div className="flex justify-between">
+                      <span className="text-gray-500">
+                        Base fare
+                      </span>
+
+                      <span className="font-medium">
+                        {formatMoney(
+                          order.base_amount,
+                          order.base_currency
+                        )}
+                      </span>
+                    </div>
+
+                    <div className="flex justify-between">
+                      <span className="text-gray-500">
+                        Tax
+                      </span>
+
+                      <span className="font-medium">
+                        {formatMoney(
+                          order.tax_amount,
+                          order.tax_currency
+                        )}
+                      </span>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {order.payment_status?.paid_at && (
+                <p className="mt-4 text-sm text-gray-500">
+                  Payment recorded on{" "}
+                  {formatDate(
+                    order.payment_status.paid_at
+                  )}
+                  .
+                </p>
+              )}
+
+              {order.payment_status?.awaiting_payment ===
+                false && (
+                <div className="mt-4 rounded-xl bg-green-50 px-4 py-3 text-sm font-medium text-green-700">
+                  Payment status: completed
+                </div>
+              )}
+            </section>
+
+          </div>
+
+          {/* Electronic Ticket */}
+          <section className="mt-6 rounded-3xl bg-white p-6 shadow-sm sm:p-8">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h2 className="text-xl font-bold text-[#26332e]">
                   Electronic Ticket
                 </h2>
 
-                <p className="mt-1 text-sm leading-6 text-gray-500">
-                  Your electronic ticket information
-                  returned by the airline booking provider.
+                <p className="mt-1 text-sm text-gray-500">
+                  Ticket information returned by the airline booking system.
                 </p>
               </div>
+
+              {electronicTickets.length > 0 && (
+                <span className="rounded-full bg-green-100 px-4 py-2 text-sm font-semibold text-green-700">
+                  Available
+                </span>
+              )}
             </div>
-          </div>
 
-          <div className="p-6 sm:p-8">
-            {electronicTickets.length === 0 ? (
-              <div className="rounded-2xl border border-amber-200 bg-amber-50 p-5">
-                <div className="flex gap-4">
-                  <div className="text-xl">
-                    ⏳
-                  </div>
-
-                  <div>
-                    <p className="font-bold text-amber-900">
-                      Ticket document is being processed.
+            {electronicTickets.length > 0 ? (
+              <div className="mt-6 grid gap-4 sm:grid-cols-2">
+                {electronicTickets.map((ticket, index) => (
+                  <div
+                    key={`${ticket.unique_identifier}-${index}`}
+                    className="rounded-2xl border border-gray-100 bg-[#f6f3ec] p-5"
+                  >
+                    <p className="text-xs uppercase tracking-wider text-gray-500">
+                      Ticket Number
                     </p>
 
-                    <p className="mt-1 text-sm leading-6 text-amber-800">
-                      Please keep your booking reference.
-                      Your ticket information may become
-                      available shortly.
+                    <p className="mt-2 break-all text-lg font-bold tracking-wide text-[#26332e]">
+                      {ticket.unique_identifier || "-"}
+                    </p>
+
+                    <p className="mt-3 text-xs text-gray-500">
+                      Passenger ticket document
                     </p>
                   </div>
-                </div>
+                ))}
               </div>
             ) : (
-              <div className="space-y-5">
-                {electronicTickets.map(
-                  (ticket, index) => (
-                    <div
-                      key={
-                        ticket.unique_identifier ||
-                        index
-                      }
-                      className="overflow-hidden rounded-2xl border border-green-200 bg-green-50"
-                    >
-                      <div className="border-b border-green-200 bg-white/70 px-5 py-4 sm:px-6">
-                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                          <div>
-                            <p className="text-xs font-bold uppercase tracking-[0.15em] text-green-700">
-                              Ticket {index + 1}
-                            </p>
-
-                            <p className="mt-1 text-lg font-bold text-[#26332e]">
-                              Electronic Ticket Issued
-                            </p>
-                          </div>
-
-                          <span className="inline-flex w-fit rounded-full bg-green-100 px-3 py-1.5 text-xs font-bold text-green-700">
-                            ISSUED
-                          </span>
-                        </div>
-                      </div>
-
-                      <div className="grid gap-px bg-green-200 sm:grid-cols-2">
-                        <div className="bg-green-50 p-5 sm:p-6">
-                          <p className="text-xs font-bold uppercase tracking-[0.14em] text-green-700/70">
-                            Ticket Identifier
-                          </p>
-
-                          <p className="mt-2 break-all text-xl font-black tracking-wide text-[#1d5c48]">
-                            {ticket.unique_identifier ||
-                              "-"}
-                          </p>
-                        </div>
-
-                        <div className="bg-green-50 p-5 sm:p-6">
-                          <p className="text-xs font-bold uppercase tracking-[0.14em] text-green-700/70">
-                            Passenger
-                          </p>
-
-                          <p className="mt-2 font-bold text-[#26332e]">
-                            {ticket.passenger_ids?.length ||
-                              0}{" "}
-                            passenger
-                            {ticket.passenger_ids &&
-                            ticket.passenger_ids.length !== 1
-                              ? "s"
-                              : ""}
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-                  )
-                )}
+              <div className="mt-6 rounded-2xl bg-yellow-50 p-5 text-sm text-yellow-800">
+                Electronic ticket information is not available in this order yet.
               </div>
             )}
-          </div>
-        </section>
+          </section>
 
-        {/* =====================================================
-            BOOKING TOTAL
-        ====================================================== */}
-
-        <section className="screen-only mb-6 overflow-hidden rounded-[2rem] bg-[#26332e] shadow-lg">
-          <div className="flex flex-col gap-6 px-6 py-7 sm:flex-row sm:items-center sm:justify-between sm:px-8">
-            <div>
-              <p className="text-xs font-bold uppercase tracking-[0.18em] text-white/60">
-                Payment Summary
-              </p>
-
-              <h2 className="mt-1 text-2xl font-bold text-white">
-                Booking Total
-              </h2>
-
-              <p className="mt-1 text-sm text-white/60">
-                Total amount associated with this booking.
-              </p>
-            </div>
-
-            <div className="sm:text-right">
-              <p className="text-4xl font-black tracking-tight text-white">
-                {paymentAmount !== null
-                  ? formatMoney(
-                      paymentAmount,
-                      paymentCurrency
-                    )
-                  : formatMoney(
-                      order.total_amount,
-                      order.total_currency
-                    )}
-              </p>
-
-              <p className="mt-1 text-xs font-medium uppercase tracking-wide text-white/50">
-                Currency:{" "}
-                {paymentAmount !== null
-                  ? paymentCurrency
-                  : order.total_currency || "EUR"}
-              </p>
-            </div>
-          </div>
-        </section>
-
-        {/* =====================================================
-            PASSENGER DETAILS
-        ====================================================== */}
-
-        <section className="screen-only mb-6 overflow-hidden rounded-[2rem] bg-white shadow-lg">
-          <div className="border-b border-gray-100 px-6 py-6 sm:px-8">
-            <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#1d5c48]">
-              Traveller Information
-            </p>
-
-            <h2 className="mt-1 text-2xl font-bold text-[#26332e]">
+          {/* Passengers */}
+          <section className="mt-6 rounded-3xl bg-white p-6 shadow-sm sm:p-8">
+            <h2 className="text-xl font-bold text-[#26332e]">
               Passenger Details
             </h2>
 
-            <p className="mt-1 text-sm leading-6 text-gray-500">
-              Passenger information included in this booking.
-            </p>
-          </div>
+            <div className="mt-6 space-y-4">
+              {order.passengers?.map((passenger, index) => (
+                <div
+                  key={passenger.id || index}
+                  className="rounded-2xl border border-gray-100 p-5"
+                >
+                  <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <p className="text-xs uppercase tracking-wider text-gray-500">
+                        Passenger {index + 1}
+                      </p>
 
-          <div className="p-6 sm:p-8">
-            {passengers.length === 0 ? (
-              <div className="rounded-2xl bg-gray-50 p-5 text-center text-sm text-gray-600">
-                No passenger details were returned by the
-                booking provider.
-              </div>
-            ) : (
-              <div className="space-y-5">
-                {passengers.map(
-                  (passenger, index) => (
-                    <div
-                      key={passenger.id || index}
-                      className="overflow-hidden rounded-2xl border border-gray-200 bg-gray-50"
-                    >
-                      <div className="flex items-center gap-4 border-b border-gray-200 bg-white px-5 py-5 sm:px-6">
-                        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-[#1d5c48] text-sm font-black text-white shadow-sm">
-                          {index + 1}
-                        </div>
-
-                        <div className="min-w-0">
-                          <p className="break-words text-lg font-bold text-[#26332e]">
-                            {getPassengerName(passenger)}
-                          </p>
-
-                          <p className="mt-0.5 text-sm capitalize text-gray-500">
-                            {passenger.type || "Passenger"}
-                          </p>
-                        </div>
-                      </div>
-
-                      <div className="grid gap-x-6 gap-y-5 p-5 sm:grid-cols-2 sm:p-6">
-                        <div>
-                          <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-gray-400">
-                            Full Name
-                          </p>
-
-                          <p className="mt-1.5 break-words font-medium text-[#26332e]">
-                            {getPassengerName(passenger)}
-                          </p>
-                        </div>
-
-                        <div>
-                          <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-gray-400">
-                            Passenger Type
-                          </p>
-
-                          <p className="mt-1.5 capitalize text-[#26332e]">
-                            {passenger.type || "-"}
-                          </p>
-                        </div>
-
-                        <div>
-                          <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-gray-400">
-                            Gender
-                          </p>
-
-                          <p className="mt-1.5 capitalize text-[#26332e]">
-                            {passenger.gender || "-"}
-                          </p>
-                        </div>
-
-                        <div>
-                          <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-gray-400">
-                            Date of Birth
-                          </p>
-
-                          <p className="mt-1.5 text-[#26332e]">
-                            {passenger.born_on || "-"}
-                          </p>
-                        </div>
-
-                        <div>
-                          <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-gray-400">
-                            Email
-                          </p>
-
-                          <p className="mt-1.5 break-all text-[#26332e]">
-                            {passenger.email || "-"}
-                          </p>
-                        </div>
-
-                        <div>
-                          <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-gray-400">
-                            Phone
-                          </p>
-
-                          <p className="mt-1.5 break-words text-[#26332e]">
-                            {passenger.phone_number || "-"}
-                          </p>
-                        </div>
-                      </div>
+                      <h3 className="mt-1 text-lg font-bold text-[#26332e]">
+                        {getPassengerName(passenger)}
+                      </h3>
                     </div>
-                  )
-                )}
-              </div>
-            )}
-          </div>
-        </section>
 
-        {/* =====================================================
-            IMPORTANT INFORMATION
-        ====================================================== */}
+                    <span className="rounded-full bg-gray-100 px-3 py-1 text-xs font-semibold capitalize text-gray-600">
+                      {passenger.type || "passenger"}
+                    </span>
+                  </div>
 
-        <section className="screen-only mb-6 overflow-hidden rounded-[2rem] border border-amber-200 bg-amber-50 shadow-sm">
-          <div className="px-6 py-6 sm:px-8">
-            <div className="flex items-start gap-4">
-              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-amber-100 text-xl">
-                ℹ
-              </div>
+                  <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                    <div>
+                      <p className="text-xs text-gray-500">
+                        Gender
+                      </p>
 
-              <div>
-                <p className="text-xs font-bold uppercase tracking-[0.18em] text-amber-700">
-                  Please Read
-                </p>
+                      <p className="mt-1 font-medium capitalize">
+                        {passenger.gender || "-"}
+                      </p>
+                    </div>
 
-                <h2 className="mt-1 text-xl font-bold text-amber-950">
-                  Important Information
-                </h2>
-              </div>
+                    <div>
+                      <p className="text-xs text-gray-500">
+                        Date of Birth
+                      </p>
+
+                      <p className="mt-1 font-medium">
+                        {passenger.born_on || "-"}
+                      </p>
+                    </div>
+
+                    <div>
+                      <p className="text-xs text-gray-500">
+                        Email
+                      </p>
+
+                      <p className="mt-1 break-all font-medium">
+                        {passenger.email || "-"}
+                      </p>
+                    </div>
+
+                    <div>
+                      <p className="text-xs text-gray-500">
+                        Phone
+                      </p>
+
+                      <p className="mt-1 font-medium">
+                        {passenger.phone_number || "-"}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              ))}
             </div>
+          </section>
 
-            <ul className="mt-6 space-y-3 text-sm leading-6 text-amber-950">
-              <li className="flex gap-3">
-                <span className="mt-0.5 font-black text-amber-700">
-                  ✓
-                </span>
+          {/* Important Information */}
+          <section className="mt-6 rounded-3xl border border-[#1d5c48]/10 bg-[#1d5c48]/5 p-6 sm:p-8">
+            <h2 className="text-xl font-bold text-[#26332e]">
+              Important Information
+            </h2>
 
-                <span>
-                  Please save your booking reference and
-                  order ID.
-                </span>
+            <ul className="mt-4 space-y-3 text-sm leading-6 text-gray-700">
+              <li>
+                • Please check your flight date and departure time carefully.
               </li>
 
-              <li className="flex gap-3">
-                <span className="mt-0.5 font-black text-amber-700">
-                  ✓
-                </span>
-
-                <span>
-                  Make sure the passenger names and
-                  personal details are correct.
-                </span>
+              <li>
+                • Airport check-in and boarding requirements are determined by the operating airline.
               </li>
 
-              <li className="flex gap-3">
-                <span className="mt-0.5 font-black text-amber-700">
-                  ✓
-                </span>
-
-                <span>
-                  Keep your electronic ticket information
-                  for your travel records.
-                </span>
+              <li>
+                • Please carry the identification document used during booking.
               </li>
 
-              <li className="flex gap-3">
-                <span className="mt-0.5 font-black text-amber-700">
-                  ✓
-                </span>
-
-                <span>
-                  For assistance with your booking, please
-                  contact Papeg Tour & Travel.
-                </span>
+              <li>
+                • Flight schedules may be subject to airline changes.
               </li>
             </ul>
+          </section>
+
+          {/* Actions */}
+          <div className="mt-8 flex flex-wrap justify-center gap-3 pb-10">
+            <button
+              type="button"
+              onClick={handlePrint}
+              className="rounded-full bg-[#1d5c48] px-6 py-3 font-semibold text-white transition hover:opacity-90"
+            >
+              Print Ticket
+            </button>
+
+            <button
+  type="button"
+  onClick={handleSavePdf}
+  className="inline-flex items-center gap-2 rounded-full border-2 border-[#1d5c48] bg-white px-6 py-3 font-semibold text-[#1d5c48] shadow-sm transition hover:bg-[#1d5c48] hover:text-white hover:shadow-md"
+>
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    className="h-5 w-5"
+  >
+    <path
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      d="M12 3v12m0 0 4-4m-4 4-4-4M5 21h14a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2"
+    />
+  </svg>
+
+  Save as PDF
+</button>
+
+            <Link
+              href="/flight"
+              className="rounded-full border border-gray-300 px-6 py-3 font-semibold text-[#26332e] transition hover:bg-gray-50"
+            >
+              Book Another Flight
+            </Link>
+
+            <Link
+              href="/tours"
+              className="rounded-full border border-gray-300 px-6 py-3 font-semibold text-[#26332e] transition hover:bg-gray-50"
+            >
+              Explore Tours
+            </Link>
+
+            <Link
+              href="/"
+              className="rounded-full border border-gray-300 px-6 py-3 font-semibold text-[#26332e] transition hover:bg-gray-50"
+            >
+              Home
+            </Link>
           </div>
-        </section>
-
-        {/* =====================================================
-            ACTIONS
-        ====================================================== */}
-
-        <div className="screen-only flex flex-col justify-center gap-3 sm:flex-row sm:flex-wrap">
-          <button
-            type="button"
-            onClick={() => window.print()}
-            className="rounded-xl border-2 border-[#1d5c48] bg-white px-7 py-3.5 text-center text-sm font-bold text-[#1d5c48] shadow-sm transition hover:-translate-y-0.5 hover:bg-[#f7faf8] hover:shadow-md"
-          >
-            🖨 Print Ticket
-          </button>
-
-          <button
-            type="button"
-            onClick={() => window.print()}
-            className="rounded-xl bg-[#1d5c48] px-7 py-3.5 text-center text-sm font-bold text-white shadow-sm transition hover:-translate-y-0.5 hover:bg-[#174b3b] hover:shadow-md"
-          >
-            📄 Save as PDF
-          </button>
-
-          <Link
-            href="/flight"
-            className="rounded-xl border-2 border-gray-200 bg-white px-7 py-3.5 text-center text-sm font-bold text-[#26332e] shadow-sm transition hover:-translate-y-0.5 hover:border-gray-300 hover:bg-gray-50"
-          >
-            Book Another Flight
-          </Link>
-
-          <Link
-            href="/tours"
-            className="rounded-xl border-2 border-gray-200 bg-white px-7 py-3.5 text-center text-sm font-bold text-[#26332e] shadow-sm transition hover:-translate-y-0.5 hover:border-gray-300 hover:bg-gray-50"
-          >
-            Explore Our Tours
-          </Link>
-
-          <Link
-            href="/"
-            className="rounded-xl border-2 border-gray-200 bg-white px-7 py-3.5 text-center text-sm font-bold text-[#26332e] shadow-sm transition hover:-translate-y-0.5 hover:border-gray-300 hover:bg-gray-50"
-          >
-            Back to Home
-          </Link>
         </div>
+      </main>
 
-        {/* =====================================================
-            FOOTER
-        ====================================================== */}
+     <style jsx global>{`
+  /* =========================================
+     FLIGHT TICKET - PDF & PRINT BASE STYLES
+     ========================================= */
 
-        <footer className="screen-only px-4 py-10 text-center">
-          <p className="text-sm font-semibold text-[#26332e]">
-            Thank you for choosing Papeg Tour & Travel.
-          </p>
+  .flight-ticket-print {
+    display: none;
+    width: 100%;
+    max-width: 190mm;
+    margin: 0 auto;
+    padding: 0;
+    background: white;
+    color: #26332e;
+    font-family: Arial, Helvetica, sans-serif;
+    box-sizing: border-box;
+  }
 
-          <p className="mt-1 text-xs text-gray-500">
-            Discover Papua Highlands with us.
-          </p>
-        </footer>
-      </div>
+  .flight-ticket-print *,
+  .flight-ticket-print *::before,
+  .flight-ticket-print *::after {
+    box-sizing: border-box;
+  }
 
-      {/* =======================================================
-          PRINT STYLES
-      ======================================================== */}
+  .print-ticket {
+    width: 100%;
+    max-width: 190mm;
+    margin: 0 auto;
+    background: white;
+    color: #26332e;
+    font-family: Arial, Helvetica, sans-serif;
+  }
 
-      <style jsx global>{`
-        .flight-ticket-print {
-          display: none;
-        }
+  .print-ticket-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 20px;
+  padding-bottom: 18px;
+  border-bottom: 2px solid #1d5c48;
+  min-height: 85px;
 
-        @media print {
-          @page {
-            size: A4;
-            margin: 10mm;
-          }
+}
 
-          html,
-          body {
-            width: 100%;
-            min-height: 100%;
-            margin: 0 !important;
-            padding: 0 !important;
-            background: white !important;
-          }
+.print-logo-wrapper {
+  width: 170px;
+  min-width: 170px;
+  height: 65px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  overflow: visible;
+  flex-shrink: 0;
+}
 
-          body {
-            -webkit-print-color-adjust: exact !important;
-            print-color-adjust: exact !important;
-          }
+.print-logo {
+  display: block;
+  width: 170px !important;
+  height: 110px !important;
+  max-width: 170px !important;
+  max-height: 110px !important;
+  object-fit: contain !important;
+  object-position: left center;
+  flex-shrink: 0 !important;
 
-          body * {
-            visibility: hidden;
-          }
+  }
 
-          .flight-ticket-print,
-          .flight-ticket-print * {
-            visibility: visible;
-          }
+  .print-small {
+    margin: 6px 0 0;
+    font-size: 10px;
+    color: #666;
+  }
 
-          .flight-ticket-print {
-            display: block !important;
-            position: absolute !important;
-            left: 0 !important;
-            top: 0 !important;
-            width: 100% !important;
-            max-width: none !important;
-            margin: 0 !important;
-            padding: 0 !important;
-            background: white !important;
-            color: #26332e !important;
-            border: 1px solid #d9e1dc !important;
-            border-radius: 14px !important;
-            box-shadow: none !important;
-            overflow: hidden !important;
-            font-family:
-              Arial,
-              Helvetica,
-              sans-serif !important;
-          }
+  .print-reference {
+    text-align: right;
+  }
 
-          .ticket-header {
-            display: flex !important;
-            align-items: center !important;
-            justify-content: space-between !important;
-            gap: 20px !important;
-            padding: 20px 22px !important;
-            background: #1d5c48 !important;
-            color: white !important;
-          }
+  .print-reference span {
+    display: block;
+    font-size: 9px;
+    letter-spacing: 1px;
+    color: #777;
+  }
 
-          .ticket-brand-area {
-            display: flex !important;
-            align-items: center !important;
-            gap: 12px !important;
-          }
+  .print-reference strong {
+    display: block;
+    margin-top: 4px;
+    font-size: 20px;
+    letter-spacing: 2px;
+    color: #1d5c48;
+  }
 
-          .ticket-logo {
-            display: flex !important;
-            align-items: center !important;
-            justify-content: center !important;
-            width: 42px !important;
-            height: 42px !important;
-            border-radius: 9px !important;
-            background: white !important;
-            color: #1d5c48 !important;
-            font-size: 12px !important;
-            font-weight: 900 !important;
-          }
+  .print-route {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: center;
+    gap: 25px;
+    padding: 28px 0;
+  }
 
-          .ticket-brand {
-            margin: 0 !important;
-            font-size: 16px !important;
-            font-weight: 800 !important;
-            letter-spacing: 0.08em !important;
-            color: white !important;
-          }
+  .print-airport {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
 
-          .ticket-label {
-            margin: 4px 0 0 !important;
-            font-size: 8px !important;
-            font-weight: 700 !important;
-            letter-spacing: 0.18em !important;
-            color: rgba(255, 255, 255, 0.75) !important;
-          }
+  .print-airport:last-child {
+    text-align: right;
+  }
 
-          .ticket-status {
-            padding: 6px 11px !important;
-            border: 1px solid rgba(255, 255, 255, 0.35) !important;
-            border-radius: 999px !important;
-            font-size: 8px !important;
-            font-weight: 800 !important;
-            letter-spacing: 0.08em !important;
-            color: white !important;
-          }
+  .print-airport strong {
+    font-size: 30px;
+    color: #26332e;
+  }
 
-          .ticket-reference {
-            display: grid !important;
-            grid-template-columns: 1fr 1fr !important;
-            gap: 1px !important;
-            background: #e7ece9 !important;
-          }
+  .print-airport span {
+    font-size: 13px;
+    font-weight: 600;
+  }
 
-          .ticket-reference > div {
-            padding: 14px 18px !important;
-            background: white !important;
-          }
+  .print-airport small {
+    font-size: 10px;
+    color: #666;
+  }
 
-          .ticket-reference span,
-          .ticket-passenger span,
-          .ticket-flight-details span,
-          .ticket-airport span,
-          .ticket-total span {
-            display: block !important;
-            margin-bottom: 5px !important;
-            font-size: 8px !important;
-            font-weight: 700 !important;
-            letter-spacing: 0.12em !important;
-            color: #7b8580 !important;
-          }
+  .print-arrow {
+    font-size: 25px;
+    color: #1d5c48;
+    text-align: center;
+  }
 
-          .ticket-reference strong {
-            display: block !important;
-            font-size: 18px !important;
-            font-weight: 900 !important;
-            color: #1d5c48 !important;
-            letter-spacing: 0.08em !important;
-            overflow-wrap: anywhere !important;
-          }
+  .print-divider {
+    height: 1px;
+    background: #ddd;
+    margin: 18px 0;
+  }
 
-          .ticket-section {
-            padding: 16px 18px !important;
-            border-top: 1px solid #e7ece9 !important;
-            background: white !important;
-          }
+  .print-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+  }
 
-          .ticket-section-title {
-            margin: 0 0 11px !important;
-            font-size: 9px !important;
-            font-weight: 800 !important;
-            letter-spacing: 0.15em !important;
-            color: #1d5c48 !important;
-          }
+  .print-grid div {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
 
-          .ticket-passenger {
-            display: grid !important;
-            grid-template-columns:
-              2fr
-              1fr
-              1fr
-              1.3fr !important;
-            gap: 14px !important;
-          }
+  .print-grid span,
+  .print-ticket-number span {
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.7px;
+    color: #777;
+  }
 
-          .ticket-passenger strong,
-          .ticket-flight-details strong {
-            display: block !important;
-            font-size: 10px !important;
-            font-weight: 750 !important;
-            color: #26332e !important;
-            overflow-wrap: anywhere !important;
-          }
+  .print-grid strong,
+  .print-ticket-number strong {
+    font-size: 11px;
+    color: #26332e;
+  }
 
-          .ticket-flight {
-            display: grid !important;
-            grid-template-columns:
-              1fr
-              auto
-              1fr !important;
-            align-items: center !important;
-            gap: 18px !important;
-            padding: 17px !important;
-            border: 1px solid #dfe7e3 !important;
-            border-radius: 12px !important;
-            background: #f7faf8 !important;
-          }
+  .print-section-title {
+    margin: 0 0 10px;
+    font-size: 14px;
+    color: #1d5c48;
+  }
 
-          .ticket-airport strong {
-            display: block !important;
-            font-size: 29px !important;
-            line-height: 1 !important;
-            font-weight: 900 !important;
-            color: #1d5c48 !important;
-          }
+  .print-passenger {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 15px;
+    padding: 9px 0;
+    border-bottom: 1px solid #eee;
+  }
 
-          .ticket-airport small {
-            display: block !important;
-            margin-top: 5px !important;
-            font-size: 9px !important;
-            color: #727c77 !important;
-          }
+  .print-passenger strong {
+    font-size: 12px;
+  }
 
-          .ticket-airport-right {
-            text-align: right !important;
-          }
+  .print-passenger span {
+    font-size: 10px;
+    color: #777;
+    text-transform: capitalize;
+  }
 
-          .ticket-arrow {
-            font-size: 22px !important;
-            font-weight: 700 !important;
-            color: #1d5c48 !important;
-          }
+  .print-ticket-number {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 15px;
+    padding: 12px;
+    background: #f6f3ec;
+    border-radius: 8px;
+  }
 
-          .ticket-flight-details {
-            display: grid !important;
-            grid-template-columns:
-              1fr
-              1fr
-              1fr !important;
-            gap: 14px !important;
-            margin-top: 12px !important;
-          }
+  .print-footer {
+    margin-top: 35px;
+    padding-top: 15px;
+    border-top: 1px solid #ddd;
+    text-align: center;
+    color: #777;
+    font-size: 9px;
+  }
 
-          .ticket-total {
-            display: flex !important;
-            align-items: center !important;
-            justify-content: space-between !important;
-            gap: 20px !important;
-            padding: 18px 20px !important;
-            background: #26332e !important;
-            color: white !important;
-          }
+  .print-footer p {
+    margin: 3px 0;
+  }
 
-          .ticket-total span {
-            color: rgba(255, 255, 255, 0.6) !important;
-          }
+  /* =========================================
+     PDF SCREEN CAPTURE SUPPORT
+     ========================================= */
 
-          .ticket-total strong {
-            display: block !important;
-            font-size: 22px !important;
-            font-weight: 900 !important;
-            color: white !important;
-          }
+  @media screen {
+    .flight-ticket-print {
+      position: absolute;
+      left: -10000px;
+      top: 0;
+    }
+  }
 
-          .ticket-currency {
-            font-size: 9px !important;
-            font-weight: 800 !important;
-            letter-spacing: 0.1em !important;
-            color: rgba(255, 255, 255, 0.65) !important;
-          }
+  /* =========================================
+     PRINT VERSION
+     ========================================= */
 
-          .ticket-note {
-            margin: 13px 18px !important;
-            padding: 11px 13px !important;
-            border: 1px solid #eadfca !important;
-            border-radius: 9px !important;
-            background: #fffaf1 !important;
-          }
+  @media print {
+    html,
+    body {
+      width: 100%;
+      margin: 0 !important;
+      padding: 0 !important;
+      background: white !important;
+    }
 
-          .ticket-note strong {
-            display: block !important;
-            font-size: 9px !important;
-            color: #594719 !important;
-          }
+    body * {
+      visibility: hidden !important;
+    }
 
-          .ticket-note p {
-            margin: 4px 0 0 !important;
-            font-size: 8px !important;
-            line-height: 1.5 !important;
-            color: #776f5e !important;
-          }
+    .flight-ticket-print,
+    .flight-ticket-print * {
+      visibility: visible !important;
+    }
 
-          .ticket-footer {
-            display: flex !important;
-            justify-content: space-between !important;
-            gap: 15px !important;
-            padding: 11px 18px !important;
-            border-top: 1px solid #e7ece9 !important;
-            font-size: 8px !important;
-            color: #7b8580 !important;
-          }
+    .flight-ticket-print {
+      display: block !important;
+      position: absolute !important;
+      left: 0 !important;
+      top: 0 !important;
+      width: 100% !important;
+      max-width: none !important;
+      margin: 0 !important;
+      padding: 0 !important;
+      background: white !important;
+    }
 
-          .screen-only {
-            display: none !important;
-          }
+    .screen-only {
+      display: none !important;
+    }
 
-          .flight-ticket-print,
-          .ticket-header,
-          .ticket-reference,
-          .ticket-section,
-          .ticket-flight,
-          .ticket-total,
-          .ticket-note,
-          .ticket-footer {
-            break-inside: avoid !important;
-            page-break-inside: avoid !important;
-          }
-        }
-      `}</style>
-    </main>
+    @page {
+      size: A4;
+      margin: 12mm;
+    }
+
+    .print-ticket {
+      width: 100%;
+      max-width: 190mm;
+      margin: 0 auto;
+    }
+  }
+`}</style>
+    </>
   );
 }
