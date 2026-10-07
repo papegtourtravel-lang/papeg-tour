@@ -689,7 +689,20 @@ async function handleSavePdf() {
               ))}
             </>
           )}
+<div className="print-divider" />
 
+<h3 className="print-section-title">
+  Payment
+</h3>
+
+<div className="print-payment">
+  <div>
+    <span>Total Paid</span>
+    <strong>
+      {formatMoney(paymentAmount, paymentCurrency)}
+    </strong>
+  </div>
+</div>
           <div className="print-footer">
             <p>
               Issued by Papeg Tour & Travel
@@ -1499,6 +1512,31 @@ async function handleSavePdf() {
     background: #f6f3ec;
     border-radius: 8px;
   }
+    .print-payment {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 15px;
+  padding: 14px;
+  background: #f6f3ec;
+  border-radius: 8px;
+  border: 1px solid #e5e7eb;
+}
+
+.print-payment span {
+  display: block;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.7px;
+  color: #777;
+}
+
+.print-payment strong {
+  display: block;
+  margin-top: 5px;
+  font-size: 18px;
+  color: #1d5c48;
+}
 
   .print-footer {
     margin-top: 35px;
