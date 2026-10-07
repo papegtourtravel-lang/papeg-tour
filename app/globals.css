@@ -18,7 +18,7 @@ body {
   padding: 0;
   font-family: Arial, Helvetica, sans-serif;
   background: #f6f3ec;
-  color: #26332e;
+  color: #14b917;
   overflow-x: hidden;
 }
 
@@ -75,7 +75,7 @@ nav > div:nth-child(2) {
 }
 
 nav a {
-  color: #26332e;
+  color: #304a40;
   text-decoration: none;
   font-size: 15px;
   font-weight: 500;
@@ -83,7 +83,7 @@ nav a {
 }
 
 nav a:hover {
-  color: #1d5c48;
+  color: #7fc9b2;
 }
 
 nav button {
@@ -2768,7 +2768,7 @@ button {
   background: rgba(246, 243, 236, 0.96);
   backdrop-filter: blur(12px);
 
-  border-bottom: 1px solid rgba(38, 51, 46, 0.08);
+  border-bottom: 1px solid rgba(101, 22, 205, 0.08);
 }
 
 .site-navbar .logo img {
