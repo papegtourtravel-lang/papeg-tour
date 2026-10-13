@@ -430,96 +430,126 @@ export async function POST(req: Request) {
           "electronic_ticket"
       );
 
-    if (
-      uniqueEmails.length > 0 &&
-      electronicTicket
-    ) {
-      for (const email of uniqueEmails) {
-        try {
-          await sendTicketEmail({
-  to: email,
+   
+if (
+  uniqueEmails.length > 0 &&
+  electronicTicket
+) {
+  for (const email of uniqueEmails) {
+    try {
+      // ==============================
+      // CONVERT EUR FARE AND TAX TO IDR
+      // ==============================
 
-  bookingReference:
-    finalOrder?.booking_reference ||
-    null,
+      const eurIdrRate = Number(
+        process.env.PAPEG_EUR_IDR_RATE
+      );
 
-  orderId:
-    finalOrder?.id ||
-    duffelOrderId,
+      const originalBaseCurrency = String(
+        finalOrder?.base_currency ?? ""
+      ).toUpperCase();
 
-  passengers,
+      const originalTaxCurrency = String(
+        finalOrder?.tax_currency ?? ""
+      ).toUpperCase();
 
-  documents,
+      const canConvertBaseToIdr =
+        originalBaseCurrency === "EUR" &&
+        Number.isFinite(eurIdrRate) &&
+        eurIdrRate > 0 &&
+        finalOrder?.base_amount != null &&
+        Number.isFinite(
+          Number(finalOrder.base_amount)
+        );
 
-  slices:
-    finalOrder?.slices ??
-    [],
+      const canConvertTaxToIdr =
+        originalTaxCurrency === "EUR" &&
+        Number.isFinite(eurIdrRate) &&
+        eurIdrRate > 0 &&
+        finalOrder?.tax_amount != null &&
+        Number.isFinite(
+          Number(finalOrder.tax_amount)
+        );
 
-  totalAmount:
-    finalOrder?.total_amount ??
-    null,
+      // ==============================
+      // SEND ELECTRONIC TICKET BY EMAIL
+      // ==============================
 
-  totalCurrency:
-    finalOrder?.total_currency ??
-    null,
+      await sendTicketEmail({
+        to: email,
 
-  baseAmount:
-    finalOrder?.base_amount ??
-    null,
+        bookingReference:
+          finalOrder?.booking_reference || null,
 
-  baseCurrency:
-    finalOrder?.base_currency ??
-    null,
+        orderId:
+          finalOrder?.id || duffelOrderId,
 
-  taxAmount:
-    finalOrder?.tax_amount ??
-    null,
+        passengers,
 
-  taxCurrency:
-    finalOrder?.tax_currency ??
-    null,
+        documents,
 
-  bookingType:
-    finalOrder?.type ??
-    null,
+        slices: finalOrder?.slices ?? [],
 
-  bookingStatus:
-    finalOrder?.status ??
-    null,
+        // Keep the actual Midtrans payment amount.
+        totalAmount: Number(gross_amount),
+        totalCurrency: "IDR",
 
-  createdAt:
-    finalOrder?.created_at ??
-    null,
+        // Convert base fare only when its currency is EUR.
+        baseAmount: canConvertBaseToIdr
+          ? Math.round(
+              Number(finalOrder.base_amount) *
+                eurIdrRate
+            )
+          : finalOrder?.base_amount ?? null,
 
-  paidAt:
-    finalOrder?.payment_status
-      ?.paid_at ??
-    null,
-});
+        baseCurrency: canConvertBaseToIdr
+          ? "IDR"
+          : finalOrder?.base_currency ?? null,
 
-          console.log(
-            "Ticket email berhasil dikirim ke:",
-            email
-          );
-        } catch (emailError) {
-          console.error(
-            "Gagal mengirim ticket email ke:",
-            email,
-            emailError
-          );
-        }
-      }
-    } else {
+        // Convert tax only when its currency is EUR.
+        taxAmount: canConvertTaxToIdr
+          ? Math.round(
+              Number(finalOrder.tax_amount) *
+                eurIdrRate
+            )
+          : finalOrder?.tax_amount ?? null,
+
+        taxCurrency: canConvertTaxToIdr
+          ? "IDR"
+          : finalOrder?.tax_currency ?? null,
+
+        bookingType: finalOrder?.type ?? null,
+
+        bookingStatus: finalOrder?.status ?? null,
+
+        createdAt: finalOrder?.created_at ?? null,
+
+        paidAt:
+          finalOrder?.payment_status?.paid_at ??
+          null,
+      });
+
       console.log(
-        "Ticket email belum dikirim:",
-        {
-          emails:
-            uniqueEmails.length,
-          electronicTicket:
-            !!electronicTicket,
-        }
+        "Ticket email berhasil dikirim ke:",
+        email
+      );
+    } catch (emailError) {
+      console.error(
+        "Gagal mengirim ticket email ke:",
+        email,
+        emailError
       );
     }
+  }
+} else {
+  console.log(
+    "Ticket email belum dikirim:",
+    {
+      emails: uniqueEmails.length,
+      electronicTicket: !!electronicTicket,
+    }
+  );
+}
 
     // ==============================
     // WEBHOOK SUCCESS RESPONSE
