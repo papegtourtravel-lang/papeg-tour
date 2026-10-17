@@ -10,7 +10,7 @@ export default function Footer() {
 
           <Link href="/">
             <img
-              src="/images/papeg-logo.png"
+              src="/images/logo-pape.png"
               alt="Papeg Tour & Travel"
             />
           </Link>

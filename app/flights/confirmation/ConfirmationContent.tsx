@@ -102,11 +102,16 @@ type BookingOrder = {
   base_currency?: string | null;
   tax_amount?: string | number | null;
   tax_currency?: string | null;
+  base_amount_display?: string | number | null;
+  base_currency_display?: string | null;
+  tax_amount_display?: string | number | null;
+  tax_currency_display?: string | null;
   passengers?: Passenger[];
   documents?: TicketDocument[];
   slices?: Slice[];
   payment_status?: PaymentStatus;
 };
+
 
 type PaymentInfo = {
   orderId?: string;
@@ -114,8 +119,9 @@ type PaymentInfo = {
   amount?: number | string;
   currency?: string;
   status?: string;
+  transactionId?: string | null;
+  paidAt?: string | null;
 };
-
 function formatDate(value?: string | null) {
   if (!value) return "-";
 
@@ -280,77 +286,89 @@ export default function ConfirmationContent() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  useEffect(() => {
-    async function loadBooking() {
-      if (!orderId) {
-        setError("Booking order ID is missing.");
-        setLoading(false);
-        return;
-      }
+  
+useEffect(() => {
+  let cancelled = false;
 
-      try {
-        setLoading(true);
-        setError("");
+  async function loadBooking() {
+    if (!orderId) {
+      setError("Booking order ID is missing.");
+      setLoading(false);
+      return;
+    }
 
-        if (typeof window !== "undefined") {
-          const storedPayment =
-            sessionStorage.getItem("midtransPayment");
+    try {
+      setLoading(true);
+      setError("");
+      setPayment(null);
 
-          if (storedPayment) {
-            try {
-              const parsedPayment = JSON.parse(
-                storedPayment
-              ) as PaymentInfo;
-
-              const matchesOrder =
-                parsedPayment.orderId === orderId ||
-                parsedPayment.midtransOrderId ===
-                  `PAPEG-${orderId}`;
-
-              if (matchesOrder) {
-                setPayment(parsedPayment);
-              }
-            } catch (paymentError) {
-              console.warn(
-                "Could not read Midtrans payment information:",
-                paymentError
-              );
-            }
-          }
-        }
-
-        const response = await fetch(
+      const [orderResponse, paymentResponse] = await Promise.all([
+        fetch(
           `/api/flights/order/${encodeURIComponent(orderId)}`,
           {
             method: "GET",
             cache: "no-store",
           }
+        ),
+        fetch(
+          `/api/payment/status/${encodeURIComponent(orderId)}`,
+          {
+            method: "GET",
+            cache: "no-store",
+          }
+        ),
+      ]);
+
+      const orderData = await orderResponse.json();
+      const paymentData = await paymentResponse.json();
+
+      if (!orderResponse.ok || !orderData?.success) {
+        throw new Error(
+          orderData?.error ||
+            "Failed to retrieve booking information."
         );
+      }
 
-        const data = await response.json();
+      if (cancelled) return;
 
-        if (!response.ok || !data?.success) {
-          throw new Error(
-            data?.error || "Failed to retrieve booking information."
-          );
-        }
+      setOrder(orderData.order);
 
-        setOrder(data.order);
-      } catch (bookingError) {
-        console.error("Confirmation error:", bookingError);
+      if (
+        paymentResponse.ok &&
+        paymentData?.success &&
+        paymentData?.paid === true &&
+        paymentData?.payment?.orderId === orderId &&
+        paymentData?.payment?.currency === "IDR" &&
+        Number.isFinite(Number(paymentData?.payment?.amount)) &&
+        Number(paymentData.payment.amount) > 0
+      ) {
+        setPayment(paymentData.payment as PaymentInfo);
+      } else {
+        setPayment(null);
+      }
+    } catch (bookingError) {
+      if (cancelled) return;
 
-        setError(
-          bookingError instanceof Error
-            ? bookingError.message
-            : "Failed to load booking confirmation."
-        );
-      } finally {
+      console.error("Confirmation error:", bookingError);
+
+      setError(
+        bookingError instanceof Error
+          ? bookingError.message
+          : "Failed to load booking confirmation."
+      );
+    } finally {
+      if (!cancelled) {
         setLoading(false);
       }
     }
+  }
 
-    loadBooking();
-  }, [orderId]);
+  loadBooking();
+
+  return () => {
+    cancelled = true;
+  };
+}, [orderId]);
 
   const segments = useMemo(() => {
     if (!order?.slices) return [];
@@ -695,6 +713,7 @@ async function handleSavePdf() {
   Payment
 </h3>
 
+
 <div className="print-payment">
   <div>
     <span>Total Paid</span>
@@ -703,6 +722,31 @@ async function handleSavePdf() {
     </strong>
   </div>
 </div>
+
+{(order.base_amount_display != null ||
+  order.tax_amount_display != null) && (
+  <div className="print-payment-details">
+    <div>
+      <span>Base Fare</span>
+      <strong>
+        {formatMoney(
+          order.base_amount_display,
+          order.base_currency_display
+        )}
+      </strong>
+    </div>
+
+    <div>
+      <span>Tax</span>
+      <strong>
+        {formatMoney(
+          order.tax_amount_display,
+          order.tax_currency_display
+        )}
+      </strong>
+    </div>
+  </div>
+)}
           <div className="print-footer">
             <p>
               Issued by Papeg Tour & Travel
@@ -1060,56 +1104,43 @@ async function handleSavePdf() {
                     paymentCurrency
                   )}
                 </p>
-
-                {order.base_amount !== undefined && (
+                {(order.base_amount_display != null ||
+                  order.tax_amount_display != null) && (
                   <div className="mt-5 space-y-2 text-sm">
-                    <div className="flex justify-between">
+                    <div className="flex justify-between gap-4">
                       <span className="text-gray-500">
-                        Base fare
+                        Base Fare
                       </span>
-
-                      <span className="font-medium">
+                      <span className="text-right font-medium text-[#26332e]">
                         {formatMoney(
-                          order.base_amount,
-                          order.base_currency
+                          order.base_amount_display,
+                          order.base_currency_display
                         )}
                       </span>
                     </div>
 
-                    <div className="flex justify-between">
+                    <div className="flex justify-between gap-4">
                       <span className="text-gray-500">
                         Tax
                       </span>
-
-                      <span className="font-medium">
+                      <span className="text-right font-medium text-[#26332e]">
                         {formatMoney(
-                          order.tax_amount,
-                          order.tax_currency
+                          order.tax_amount_display,
+                          order.tax_currency_display
                         )}
                       </span>
                     </div>
                   </div>
                 )}
+
+                {order.payment_status?.awaiting_payment ===
+                  false && (
+                  <div className="mt-4 rounded-xl bg-green-50 px-4 py-3 text-sm font-medium text-green-700">
+                    Payment status: completed
+                  </div>
+                )}
               </div>
-
-              {order.payment_status?.paid_at && (
-                <p className="mt-4 text-sm text-gray-500">
-                  Payment recorded on{" "}
-                  {formatDate(
-                    order.payment_status.paid_at
-                  )}
-                  .
-                </p>
-              )}
-
-              {order.payment_status?.awaiting_payment ===
-                false && (
-                <div className="mt-4 rounded-xl bg-green-50 px-4 py-3 text-sm font-medium text-green-700">
-                  Payment status: completed
-                </div>
-              )}
             </section>
-
           </div>
 
           {/* Electronic Ticket */}
@@ -1538,6 +1569,32 @@ async function handleSavePdf() {
   color: #1d5c48;
 }
 
+.print-payment-details {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 15px;
+  margin-top: 10px;
+  padding: 14px;
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+}
+
+.print-payment-details span {
+  display: block;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.7px;
+  color: #777;
+}
+
+.print-payment-details strong {
+  display: block;
+  margin-top: 5px;
+  font-size: 12px;
+  color: #26332e;
+  overflow-wrap: anywhere;
+}
   .print-footer {
     margin-top: 35px;
     padding-top: 15px;

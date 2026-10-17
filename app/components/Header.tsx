@@ -14,13 +14,13 @@ export default function Header() {
         {/* LOGO */}
         <Link href="/" className="logo">
           <img
-            src="/images/papeg-logo.png"
+            src="/images/logo-pape.png"
             alt="Papeg Tour & Travel"
           />
         </Link>
 
         {/* NAVIGATION */}
-        <nav className="main-nav">
+        <nav className="main-nav">            
           <Link href="/destinations" className="nav-link">
             Destinations
           </Link>
@@ -35,7 +35,7 @@ export default function Header() {
 
           <Link href="/contact" className="nav-link">
             Contact
-          </Link>
+          </Link>    
 
           {/* CURRENCY */}
           <select

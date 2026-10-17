@@ -92,6 +92,7 @@ type FlightTicketPdfData = {
 
   totalAmount?: string | number | null;
   totalCurrency?: string | null;
+  totalLabel?: string;
 
   baseAmount?: string | number | null;
   baseCurrency?: string | null;
@@ -1381,7 +1382,7 @@ export async function generateFlightTicketPdf(
 
   drawText(
     page,
-    "TOTAL PAID",
+    data.totalLabel || "TOTAL PAID",
     52,
     y - 20,
     7.5,

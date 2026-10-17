@@ -67,7 +67,7 @@ export default function CustomizedTourPage() {
       <section
         className="tour-detail-hero"
         style={{
-          backgroundImage: "url('/images/baliem.jpg')",
+          backgroundImage: "url('/images/baliem.webp')",
         }}
       >
         <div className="tour-detail-overlay">

@@ -42,6 +42,9 @@ export default function Navbar() {
           Contact
         </Link>
 
+        <link href="#home" onClick={closeMenu}>
+        </link>
+
       </div>
 
       {/* BOOKING */}
